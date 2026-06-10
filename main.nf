@@ -68,7 +68,7 @@ params.models           = null
 
 // ── Infrastructure paths ────────────────────────────────────────────────
 // Containers
-params.benchmark_container = "/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/benchmark_models.img"
+params.benchmark_container = "/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/Boltz1_Boltz2_Chai1.img"
 params.colabfold_container = "/hpc-home/jowillia/singularity/ColabFold/colabfold.img"
 
 // Databases

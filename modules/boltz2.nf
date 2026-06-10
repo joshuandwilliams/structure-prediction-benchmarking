@@ -11,7 +11,7 @@
  *
  * Gotchas preserved from the original bench scripts:
  *   1. --no_kernels is required because cuequivariance_torch is absent from
- *      benchmark_models.img.
+ *      Boltz1_Boltz2_Chai1.img.
  *   2. `boltz predict` exits 0 even on silent parse failures — but only the
  *      Boltz-1 scripts added explicit PDB-count guards.  For Boltz-2 we
  *      follow the same defensive pattern for consistency.

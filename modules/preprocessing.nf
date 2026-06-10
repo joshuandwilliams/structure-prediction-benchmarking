@@ -2,7 +2,7 @@
  * =============================================================================
  * Preprocessing module
  * =============================================================================
- * Runs extract_sequences.py inside the benchmark_models.img container to
+ * Runs extract_sequences.py inside the Boltz1_Boltz2_Chai1.img container to
  * pull chain sequences out of the reference PDB.  Downstream processes read
  * chain_A / chain_B sequences as value channels parsed from the produced
  * sequences.json.

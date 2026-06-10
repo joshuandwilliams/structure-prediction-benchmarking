@@ -20,7 +20,7 @@
 set -euo pipefail
 
 REPO_DIR="/hpc-home/jowillia/receptor_design/structure-prediction-benchmarking"
-BENCHMARK_IMG="/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/benchmark_models.img"
+BENCHMARK_IMG="/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/Boltz1_Boltz2_Chai1.img"
 
 cd "${REPO_DIR}"
 

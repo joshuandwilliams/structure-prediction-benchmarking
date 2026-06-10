@@ -1,0 +1,435 @@
+BootStrap: yum
+OSVersion: 9
+MirrorURL: http://yum-repos.hpccluster/AlmaLinux/9/os/$basearch/
+Include: yum
+
+%files
+
+%environment
+    export PATH=/usr/local/bin:$PATH
+    export BOLTZ_CACHE=/opt/boltz_cache
+    export CHAI_CACHE=/opt/chai_cache
+    export NUMBA_CACHE_DIR=/tmp
+    export MPLCONFIGDIR=/tmp
+    # Prevent HuggingFace / torch hub from trying to download at runtime
+    export HF_HUB_OFFLINE=1
+    export TORCH_HOME=/opt/torch_hub
+
+%post
+    export NUMBA_CACHE_DIR=/tmp
+    export MPLCONFIGDIR=/tmp
+
+    # =========================================================================
+    # Minimal bootstrap packages needed for pre-flight checks
+    # (wget and CA certificates must be available before URL checks)
+    # =========================================================================
+    yum install -y wget ca-certificates 2>/dev/null || yum install -y wget 2>/dev/null
+
+    # =========================================================================
+    # PRE-FLIGHT URL CHECKS
+    #
+    # Verify that every model weight / data URL is reachable BEFORE spending
+    # 30+ minutes compiling Python and installing packages.
+    # =========================================================================
+    echo ""
+    echo "=== PRE-FLIGHT URL CHECKS ==="
+    echo "Verifying all download URLs are reachable before building..."
+    echo ""
+
+    URL_FAIL=0
+
+    check_url() {
+        local label="$1"
+        local url="$2"
+        if wget --timeout=15 --tries=2 --no-check-certificate \
+                --header="Range: bytes=0-0" \
+                -O /dev/null "$url" 2>/dev/null; then
+            echo "  OK   $label"
+        else
+            echo "  FAIL $label"
+            echo "       $url"
+            URL_FAIL=$((URL_FAIL + 1))
+        fi
+    }
+
+    # Python source
+    check_url "Python 3.11.9 source" \
+        "https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz"
+
+    # Boltz-2 weights
+    check_url "Boltz-2 conf checkpoint" \
+        "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_conf.ckpt"
+    check_url "Boltz-2 affinity checkpoint" \
+        "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_aff.ckpt"
+    check_url "Boltz-2 CCD mols.tar" \
+        "https://huggingface.co/boltz-community/boltz-2/resolve/main/mols.tar"
+
+    # Boltz-1 weights (same HF repo, downloaded into shared BOLTZ_CACHE)
+    check_url "Boltz-1 conf checkpoint" \
+        "https://huggingface.co/boltz-community/boltz-1/resolve/main/boltz1_conf.ckpt"
+    check_url "Boltz-1 CCD dictionary" \
+        "https://huggingface.co/boltz-community/boltz-1/resolve/main/ccd.pkl"
+
+    # -------------------------------------------------------------------------
+    # Chai-1 v0.6.1 inference dependencies (from chaiassets.com)
+    #
+    # COMPLETE LIST — derived from source inspection of chai_lab v0.6.1:
+    #   paths.py  -> conformers_v1.apkl
+    #   paths.py  -> models_v2/{trunk,token_embedder,feature_embedding,
+    #                            diffusion_module,confidence_head,
+    #                            bond_loss_input_proj}.pt
+    #   esm.py    -> esm2/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt
+    #
+    # NOTE: Remote URL uses "esm2/" but code stores locally under "esm/".
+    # -------------------------------------------------------------------------
+    check_url "Chai-1 conformers" \
+        "https://chaiassets.com/chai1-inference-depencencies/conformers_v1.apkl"
+    check_url "Chai-1 trunk weights" \
+        "https://chaiassets.com/chai1-inference-depencencies/models_v2/trunk.pt"
+    check_url "Chai-1 token_embedder" \
+        "https://chaiassets.com/chai1-inference-depencencies/models_v2/token_embedder.pt"
+    check_url "Chai-1 feature_embedding" \
+        "https://chaiassets.com/chai1-inference-depencencies/models_v2/feature_embedding.pt"
+    check_url "Chai-1 diffusion_module" \
+        "https://chaiassets.com/chai1-inference-depencencies/models_v2/diffusion_module.pt"
+    check_url "Chai-1 confidence_head" \
+        "https://chaiassets.com/chai1-inference-depencencies/models_v2/confidence_head.pt"
+    check_url "Chai-1 bond_loss_input_proj" \
+        "https://chaiassets.com/chai1-inference-depencencies/models_v2/bond_loss_input_proj.pt"
+    check_url "Chai-1 ESM2 embeddings" \
+        "https://chaiassets.com/chai1-inference-depencencies/esm2/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt"
+
+    # PyPI reachability
+    check_url "PyPI index" \
+        "https://pypi.org/simple/"
+    check_url "PyTorch cu124 index" \
+        "https://download.pytorch.org/whl/cu124/"
+
+    echo ""
+    if [ $URL_FAIL -gt 0 ]; then
+        echo "PRE-FLIGHT FAILED: $URL_FAIL URL(s) unreachable."
+        echo "Fix the URLs above before building. Aborting."
+        exit 1
+    fi
+    echo "All URLs verified. Proceeding with build."
+    echo ""
+
+    # =========================================================================
+    # System dependencies
+    # =========================================================================
+    yum update -y
+    yum install -y openssl-devel bzip2-devel libffi-devel epel-release binutils wget
+    yum install -y git unzip tar gzip bzip2 which zlib-devel
+    yum groupinstall -y "Development Tools"
+
+    # =========================================================================
+    # Install Python 3.11
+    # =========================================================================
+    wget https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz
+    tar -xzf Python-3.11.9.tgz
+    cd Python-3.11.9
+    ./configure --enable-optimizations
+    make altinstall
+    cd /
+    rm -rf Python-3.11.9 Python-3.11.9.tgz
+
+    rm -f /usr/bin/python
+    ln -s /usr/local/bin/python3.11 /usr/bin/python
+    ln -s /usr/local/bin/pip3.11 /usr/bin/pip
+
+    python -V
+    pip install --upgrade setuptools pip
+
+    # =========================================================================
+    # Install PyTorch with CUDA 12.4 support
+    # =========================================================================
+    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+
+    # =========================================================================
+    # MODEL 1: BOLTZ-2
+    # =========================================================================
+    echo ""
+    echo "=== Installing Boltz-2 ==="
+    pip install trifast
+    pip install boltz
+    pip install --no-deps nvidia-cuequivariance-ops-torch || \
+        echo "WARN: cuequivariance kernels not installed (optional)"
+
+    # =========================================================================
+    # MODEL 2: BOLTZ-1 (via unified boltz package with --model boltz1)
+    #
+    # Since boltz >=1.0.0 the single `boltz` package supports both Boltz-2
+    # (default) and Boltz-1 via `boltz predict --model boltz1`.  No separate
+    # install is needed — just a convenience wrapper script.
+    # =========================================================================
+    echo ""
+    echo "=== Configuring Boltz-1 (via unified boltz package) ==="
+    cat > /usr/local/bin/boltz1 << 'WRAPPER'
+#!/bin/bash
+# Convenience wrapper: run Boltz-1 through the unified boltz CLI.
+# Usage: boltz1 predict <input_path> [options]
+#
+# This is equivalent to: boltz predict --model boltz1 <args>
+# The unified package shares BOLTZ_CACHE for weights and CCD data.
+
+# If the first argument is "predict", inject --model boltz1.
+# Otherwise pass everything through (e.g. boltz1 --help).
+if [ "$1" = "predict" ]; then
+    shift
+    exec boltz predict --model boltz1 "$@"
+else
+    exec boltz "$@"
+fi
+WRAPPER
+    chmod +x /usr/local/bin/boltz1
+
+    # =========================================================================
+    # MODEL 3: CHAI-1 (v0.6.1)
+    # =========================================================================
+    echo ""
+    echo "=== Installing Chai-1 ==="
+    pip install chai_lab==0.6.1
+
+    # =========================================================================
+    # Shared analysis dependencies
+    # =========================================================================
+    pip install matplotlib biopython gemmi scipy scikit-learn pandas
+
+    # =========================================================================
+    # Verify torch was not overwritten by any model install
+    # =========================================================================
+    TORCH_VER=$(python -c "import torch; print(torch.__version__)")
+    echo ""
+    echo "PyTorch version after all installs: $TORCH_VER"
+    case "$TORCH_VER" in
+        2.6.0*) echo "OK: torch 2.6.0 preserved" ;;
+        *) echo "WARNING: torch version changed to $TORCH_VER — may cause issues" ;;
+    esac
+
+    # =========================================================================
+    # PRE-DOWNLOAD ALL MODEL WEIGHTS
+    #
+    # Compute nodes are air-gapped. Download everything now.
+    # =========================================================================
+    echo ""
+    echo "=== Downloading model weights ==="
+
+    export TORCH_HOME=/opt/torch_hub
+    mkdir -p $TORCH_HOME
+
+    # --- Boltz-2 ---
+    export BOLTZ_CACHE=/opt/boltz_cache
+    mkdir -p $BOLTZ_CACHE
+
+    echo "  [Boltz-2] Downloading weights..."
+    wget -q --show-progress -O "$BOLTZ_CACHE/boltz2_conf.ckpt" \
+        "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_conf.ckpt"
+    wget -q --show-progress -O "$BOLTZ_CACHE/boltz2_aff.ckpt" \
+        "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_aff.ckpt"
+    wget -q --show-progress -O "$BOLTZ_CACHE/mols.tar" \
+        "https://huggingface.co/boltz-community/boltz-2/resolve/main/mols.tar"
+    cd $BOLTZ_CACHE && tar xf mols.tar
+
+    # --- Boltz-1 (into shared BOLTZ_CACHE) ---
+    # The unified boltz package's download_boltz1() expects BOTH:
+    #   {cache}/boltz1_conf.ckpt  — model weights
+    #   {cache}/ccd.pkl           — CCD dictionary (different format from Boltz-2's mols.tar!)
+    # Boltz-1 uses ccd.pkl; Boltz-2 uses mols.tar/mols/. Both coexist in the same cache dir.
+    echo "  [Boltz-1] Downloading weights and CCD into shared cache..."
+    wget -q --show-progress -O "$BOLTZ_CACHE/boltz1_conf.ckpt" \
+        "https://huggingface.co/boltz-community/boltz-1/resolve/main/boltz1_conf.ckpt"
+    wget -q --show-progress -O "$BOLTZ_CACHE/ccd.pkl" \
+        "https://huggingface.co/boltz-community/boltz-1/resolve/main/ccd.pkl"
+
+    # --- Chai-1 ---
+    # =========================================================================
+    # COMPLETE list of Chai-1 v0.6.1 runtime dependencies
+    # (from source inspection of paths.py, chai1.py, and esm.py)
+    #
+    # TWO BUGS FIXED vs previous .def:
+    #   1. bond_loss_input_proj.pt was missing (loaded at chai1.py:634)
+    #   2. ESM2 was cached under esm2/ but code expects esm/ (esm.py:31-32)
+    # =========================================================================
+    export CHAI_CACHE=/opt/chai_cache
+
+    # CRITICAL: local directory names must match what Python code expects
+    mkdir -p "${CHAI_CACHE}/models_v2" "${CHAI_CACHE}/esm"
+
+    CHAI_BASE_URL="https://chaiassets.com/chai1-inference-depencencies"
+
+    echo "  [Chai-1] Downloading inference dependencies from chaiassets.com..."
+
+    # Model weight components (models_v2/)
+    for COMP in \
+        "trunk.pt" \
+        "token_embedder.pt" \
+        "feature_embedding.pt" \
+        "diffusion_module.pt" \
+        "confidence_head.pt" \
+        "bond_loss_input_proj.pt" \
+    ; do
+        DEST="${CHAI_CACHE}/models_v2/${COMP}"
+        if [ ! -s "$DEST" ]; then
+            echo "    Downloading models_v2/${COMP}..."
+            wget -q --show-progress --no-check-certificate \
+                -O "$DEST" \
+                "${CHAI_BASE_URL}/models_v2/${COMP}" \
+                || { echo "FAIL: models_v2/${COMP}"; exit 1; }
+        else
+            echo "    Already cached: models_v2/${COMP}"
+        fi
+    done
+
+    # Conformers (top-level file)
+    DEST="${CHAI_CACHE}/conformers_v1.apkl"
+    if [ ! -s "$DEST" ]; then
+        echo "    Downloading conformers_v1.apkl..."
+        wget -q --show-progress --no-check-certificate \
+            -O "$DEST" \
+            "${CHAI_BASE_URL}/conformers_v1.apkl" \
+            || { echo "FAIL: conformers_v1.apkl"; exit 1; }
+    else
+        echo "    Already cached: conformers_v1.apkl"
+    fi
+
+    # ESM2 language model embeddings (~5.3 GB)
+    # IMPORTANT: Remote URL path has /esm2/ but local path must be /esm/
+    #            (see chai_lab/data/dataset/embeddings/esm.py lines 24,31-32)
+    DEST="${CHAI_CACHE}/esm/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt"
+    if [ ! -s "$DEST" ]; then
+        echo "    Downloading esm/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt (~5GB)..."
+        wget -q --show-progress --no-check-certificate \
+            -O "$DEST" \
+            "${CHAI_BASE_URL}/esm2/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt" \
+            || { echo "FAIL: ESM2 embeddings"; exit 1; }
+    else
+        echo "    Already cached: esm/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt"
+    fi
+
+    echo "  [Chai-1] Cache contents:"
+    find "${CHAI_CACHE}" -type f -exec du -sh {} \; | sort -rh | head -15
+    echo "  Total: $(du -sh ${CHAI_CACHE} | cut -f1)"
+
+    # =========================================================================
+    # Fix permissions
+    # =========================================================================
+    cd /usr/local/lib/
+    chmod 755 python3.11
+    chmod 755 python3.11/site-packages
+    cd /usr/local/lib/python3.11/site-packages/
+    find . -mount -type d -exec chmod 755 {} \;
+    find . -mount -type f -exec chmod 775 {} \;
+
+    chmod -R a+rX /opt/boltz_cache
+    chmod -R a+rX /opt/chai_cache
+    chmod -R a+rX /opt/torch_hub
+
+    # =========================================================================
+    # FINAL VERIFICATION
+    # =========================================================================
+    echo ""
+    echo "=== FINAL VERIFICATION ==="
+
+    MISSING=0
+
+    echo "--- Python & PyTorch ---"
+    python -c "import sys; print(f'Python: {sys.version}')"
+    python -c "import torch; print(f'PyTorch: {torch.__version__}')" \
+        || { echo "FAIL: torch"; MISSING=$((MISSING + 1)); }
+    python -c "import torch; print(f'CUDA build: {torch.version.cuda}')"
+
+    echo ""
+    echo "--- Model 1: Boltz-2 ---"
+    python -c "import boltz; print('  Boltz import OK')" \
+        || { echo "  FAIL: boltz import"; MISSING=$((MISSING + 1)); }
+    boltz --help > /dev/null 2>&1 \
+        && echo "  PASS: boltz CLI" \
+        || { echo "  FAIL: boltz CLI"; MISSING=$((MISSING + 1)); }
+    [ -s "/opt/boltz_cache/boltz2_conf.ckpt" ] \
+        && echo "  PASS: boltz2_conf.ckpt ($(du -sh /opt/boltz_cache/boltz2_conf.ckpt | cut -f1))" \
+        || { echo "  FAIL: boltz2_conf.ckpt"; MISSING=$((MISSING + 1)); }
+    [ -s "/opt/boltz_cache/boltz2_aff.ckpt" ] \
+        && echo "  PASS: boltz2_aff.ckpt ($(du -sh /opt/boltz_cache/boltz2_aff.ckpt | cut -f1))" \
+        || { echo "  FAIL: boltz2_aff.ckpt"; MISSING=$((MISSING + 1)); }
+    [ -d "/opt/boltz_cache/mols" ] \
+        && echo "  PASS: mols/ directory" \
+        || { echo "  FAIL: mols/ directory"; MISSING=$((MISSING + 1)); }
+
+    echo ""
+    echo "--- Model 2: Boltz-1 (via unified boltz CLI with --model boltz1) ---"
+    [ -s "/opt/boltz_cache/boltz1_conf.ckpt" ] \
+        && echo "  PASS: boltz1_conf.ckpt ($(du -sh /opt/boltz_cache/boltz1_conf.ckpt | cut -f1))" \
+        || { echo "  FAIL: boltz1_conf.ckpt"; MISSING=$((MISSING + 1)); }
+    [ -s "/opt/boltz_cache/ccd.pkl" ] \
+        && echo "  PASS: ccd.pkl ($(du -sh /opt/boltz_cache/ccd.pkl | cut -f1))" \
+        || { echo "  FAIL: ccd.pkl (required by Boltz-1's download_boltz1)"; MISSING=$((MISSING + 1)); }
+    [ -d "/opt/boltz_cache/mols" ] \
+        && echo "  PASS: mols/ directory (shared with Boltz-2)" \
+        || { echo "  FAIL: mols/ directory (needed by Boltz-2)"; MISSING=$((MISSING + 1)); }
+    [ -x "/usr/local/bin/boltz1" ] \
+        && echo "  PASS: boltz1 wrapper script" \
+        || { echo "  FAIL: boltz1 wrapper"; MISSING=$((MISSING + 1)); }
+
+    echo ""
+    echo "--- Model 3: Chai-1 (comprehensive file check) ---"
+    python -c "import chai_lab; print('  Chai-1 import OK')" \
+        || { echo "  FAIL: chai_lab import"; MISSING=$((MISSING + 1)); }
+
+    for F in \
+        "conformers_v1.apkl" \
+        "models_v2/trunk.pt" \
+        "models_v2/token_embedder.pt" \
+        "models_v2/feature_embedding.pt" \
+        "models_v2/diffusion_module.pt" \
+        "models_v2/confidence_head.pt" \
+        "models_v2/bond_loss_input_proj.pt" \
+        "esm/traced_sdpa_esm2_t36_3B_UR50D_fp16.pt" \
+    ; do
+        if [ -s "/opt/chai_cache/${F}" ]; then
+            echo "  PASS: ${F} ($(du -sh /opt/chai_cache/${F} | cut -f1))"
+        else
+            echo "  FAIL: ${F} MISSING or empty"
+            MISSING=$((MISSING + 1))
+        fi
+    done
+
+    echo ""
+    echo "--- Shared dependencies ---"
+    python -c "import numpy; print(f'  NumPy: {numpy.__version__}')"
+    python -c "import pandas; print(f'  Pandas: {pandas.__version__}')"
+    python -c "import scipy; print(f'  SciPy: {scipy.__version__}')"
+    python -c "import Bio; print(f'  Biopython: {Bio.__version__}')"
+    python -c "import matplotlib; print(f'  Matplotlib: {matplotlib.__version__}')"
+
+    echo ""
+    echo "--- trifast (Boltz accelerated kernels) ---"
+    python -c "import trifast; print(f'  trifast: {trifast.__version__}')" 2>/dev/null \
+        && echo "  PASS: trifast" \
+        || echo "  INFO: trifast import failed (expected — no GPU on build node)"
+
+    echo ""
+    echo "--- Cache sizes ---"
+    echo "  Boltz cache (shared): $(du -sh /opt/boltz_cache | cut -f1)"
+    echo "  Chai-1 cache:         $(du -sh /opt/chai_cache | cut -f1)"
+
+    echo ""
+    if [ $MISSING -gt 0 ]; then
+        echo "BUILD ABORTED: $MISSING critical component(s) missing."
+        exit 1
+    fi
+
+    echo "=== All checks passed — NLR benchmark container ready ==="
+    echo ""
+    echo "Models included:"
+    echo "  1. Boltz-2  (latest PyPI, default model)"
+    echo "  2. Boltz-1  (via boltz predict --model boltz1, same package)"
+    echo "  3. Chai-1   (v0.6.1)"
+    echo ""
+    echo "Models NOT included (separate containers or existing installs):"
+    echo "  - AlphaFold3          (use existing HPC installation)"
+    echo "  - AlphaFold2-Multimer (use existing HPC installation)"
+    echo "  - ColabFold           (separate container — see colabfold.def)"
+    echo "  - ESMFold             (separate container — see esmfold.def)"
+    echo "  - OpenFold/OpenFold3  (conda-based — separate container if needed)"
+    echo "  - RFAA               (pre-built SIF from Baker lab — separate container)"
+    echo "  - Protenix           (omitted — ByteDance CDN inaccessible; add later if needed)"

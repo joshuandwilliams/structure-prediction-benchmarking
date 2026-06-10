@@ -13,7 +13,7 @@
  *   1. `boltz predict` exits 0 even on silent parse failures — the process
  *      loop verifies that each seed produced at least one PDB.
  *   2. --no_kernels is required because cuequivariance_torch is absent
- *      from benchmark_models.img.
+ *      from Boltz1_Boltz2_Chai1.img.
  *   3. Seeds are run SERIALLY inside the process (five seeds: 42, 123, 456,
  *      789, 1024) to match the original bench scripts and respect the small
  *      jic-gpu queue.
