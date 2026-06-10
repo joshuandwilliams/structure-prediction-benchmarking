@@ -57,6 +57,10 @@ outputs into a single `all_outputs/<seed_tag>/…` staging tree that
 `compute_metrics.py` globs recursively. `boltz predict` exits 0 even on
 silent parse failures, so each seed is guarded by a "produced ≥1 PDB" check.
 
+The aggregation step is shared: every Boltz/Chai process calls
+`bin/aggregate_seed_outputs.sh <ext...>` (Boltz keeps `pdb npz json`; Chai-1
+additionally keeps `pt`) instead of carrying its own copy of the loop.
+
 ## Constraints (Boltz only)
 
 `extract_constraints_boltz1.py` emits a **pocket-only** block — Boltz-1's
@@ -82,7 +86,9 @@ elapsed/cpu/rss/vmem; the `workflow.onComplete` hook in `main.nf` filters
   deployed Nextflow runtime. Treat `nextflow lint` as a regression check
   (don't add *new* errors) rather than a must-be-green gate until those
   closures are rewritten.
-- The per-seed `run_seed` shell function and the seed-output aggregation
-  loop are duplicated across the six Boltz processes — the clearest
-  remaining DRY target, deferred because it can only be verified by a real
-  HPC run.
+- The per-seed `run_seed` shell function is still duplicated across the six
+  Boltz processes. Unlike the aggregation loop (now shared via
+  `bin/aggregate_seed_outputs.sh`), it wraps the GPU `singularity exec … boltz
+  predict` call with per-variant flag differences (`--model boltz1`,
+  `--use_potentials`), so extracting it safely needs a real HPC smoke-test to
+  verify — deferred until then.

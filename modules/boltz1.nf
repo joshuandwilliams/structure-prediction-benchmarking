@@ -112,18 +112,7 @@ EOF
     done
 
     # ─── Aggregate all seed outputs into one staging dir ──────────────────
-    mkdir -p all_outputs
-    for seed_dir in output output_seed*; do
-        [ -d "\${seed_dir}" ] || continue
-        seed_tag=\$(basename "\${seed_dir}")
-        find "\${seed_dir}" \\( -name "*.pdb" -o -name "*.npz" -o -name "*.json" \\) \\
-        | while read -r f; do
-            rel="\${f#\${seed_dir}/}"
-            dst="all_outputs/\${seed_tag}/\${rel}"
-            mkdir -p "\$(dirname "\${dst}")"
-            cp "\${f}" "\${dst}"
-        done
-    done
+    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz json
 
     echo "Aggregated PDB files:"
     find all_outputs -name "*.pdb" | sort
@@ -219,18 +208,7 @@ YAMLEOF
     done
 
     # ─── Aggregate outputs ────────────────────────────────────────────────
-    mkdir -p all_outputs
-    for seed_dir in output output_seed*; do
-        [ -d "\${seed_dir}" ] || continue
-        seed_tag=\$(basename "\${seed_dir}")
-        find "\${seed_dir}" \\( -name "*.pdb" -o -name "*.npz" -o -name "*.json" \\) \\
-        | while read -r f; do
-            rel="\${f#\${seed_dir}/}"
-            dst="all_outputs/\${seed_tag}/\${rel}"
-            mkdir -p "\$(dirname "\${dst}")"
-            cp "\${f}" "\${dst}"
-        done
-    done
+    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz json
 
     echo "Aggregated PDB files:"
     find all_outputs -name "*.pdb" | sort
@@ -372,18 +350,7 @@ YAMLEOF
     done
 
     # ─── Aggregate outputs ────────────────────────────────────────────────
-    mkdir -p all_outputs
-    for seed_dir in output output_seed*; do
-        [ -d "\${seed_dir}" ] || continue
-        seed_tag=\$(basename "\${seed_dir}")
-        find "\${seed_dir}" \\( -name "*.pdb" -o -name "*.npz" -o -name "*.json" \\) \\
-        | while read -r f; do
-            rel="\${f#\${seed_dir}/}"
-            dst="all_outputs/\${seed_tag}/\${rel}"
-            mkdir -p "\$(dirname "\${dst}")"
-            cp "\${f}" "\${dst}"
-        done
-    done
+    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz json
 
     echo "Aggregated PDB files:"
     find all_outputs -name "*.pdb" | sort

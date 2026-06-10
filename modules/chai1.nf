@@ -138,18 +138,7 @@ for f in sorted(output_dir.rglob("*")):
 CHAI_SCRIPT
 
     # ─── Aggregate multi-seed outputs ─────────────────────────────────────
-    mkdir -p all_outputs
-    for seed_dir in output output_seed*; do
-        [ -d "\${seed_dir}" ] || continue
-        seed_tag=\$(basename "\${seed_dir}")
-        find "\${seed_dir}" \\( -name "*.pdb" -o -name "*.npz" -o -name "*.pt" -o -name "*.json" \\) \\
-        | while read -r f; do
-            rel="\${f#\${seed_dir}/}"
-            dst="all_outputs/\${seed_tag}/\${rel}"
-            mkdir -p "\$(dirname "\${dst}")"
-            cp "\${f}" "\${dst}"
-        done
-    done
+    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz pt json
 
     echo "Aggregated PDB files:"
     find all_outputs -name "*.pdb" | sort | head -20 || true
