@@ -10,8 +10,8 @@ tests/
                        helpers. Run on every change; no HPC, no GPU.
   characterization/    Tier 2 — hpc. Fixture-based characterization of whole
                        predictor stages against a fresh pipeline run.
-  run_pytest.slurm.sh  Submit the suite on the HPC (where gemmi/PyYAML and
-                       real prediction outputs are available).
+  run_pytest.slurm.sh  Submit the suite on the HPC in the lightweight
+                       pytest_runner container (pytest + numpy + pandas).
 ```
 
 ## Tier 1 — `local_unit` (Mac, fast)
@@ -44,7 +44,13 @@ Singularity containers + GPU). Add fixtures and tests under
 [`characterization/README.md`](characterization/README.md).
 
 ```bash
-sbatch tests/run_pytest.slurm.sh        # runs the full suite on the HPC
+# Runs the suite in the lightweight pytest_runner container (PyYAML tests skip).
+sbatch tests/run_pytest.slurm.sh
+
+# A real hpc-tier run that parses predictions with gemmi needs the benchmark
+# container instead:
+PYTEST_CONTAINER=/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/Boltz1_Boltz2_Chai1.img \
+    sbatch tests/run_pytest.slurm.sh -m hpc
 ```
 
 ## Adding a unit test

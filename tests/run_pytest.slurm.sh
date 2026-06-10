@@ -9,18 +9,24 @@
 #SBATCH --output=pytest_%j.out
 #SBATCH --error=pytest_%j.err
 
-# Run the Python test suite on the HPC, inside the benchmark container so the
-# parser dependencies (gemmi, numpy, biopython, PyYAML) are available.
+# Run the Python test suite on the HPC, inside the lightweight pytest_runner
+# container (pytest + numpy + pandas). That covers the whole local_unit tier:
+# the numpy maths, the pure-Python helpers, and the extractor/FASTA CLIs (which
+# are pure stdlib). pytest_runner does NOT ship gemmi/biopython/PyYAML, so the
+# PyYAML-dependent validator tests skip cleanly (they importorskip "yaml").
+#
+# A genuine `hpc`-tier run that parses real predictions with gemmi would need
+# the benchmark container instead — override CONTAINER below for that.
 #
 # Usage:
-#   sbatch tests/run_pytest.slurm.sh                 # full suite
+#   sbatch tests/run_pytest.slurm.sh                 # full suite (yaml tests skip)
 #   sbatch tests/run_pytest.slurm.sh -m local_unit   # one tier
 #   sbatch tests/run_pytest.slurm.sh tests/unit -q   # any pytest args
 
 set -euo pipefail
 
 REPO_DIR="/hpc-home/jowillia/receptor_design/structure-prediction-benchmarking"
-BENCHMARK_IMG="/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/Boltz1_Boltz2_Chai1.img"
+CONTAINER="${PYTEST_CONTAINER:-/hpc-home/jowillia/singularity/pytest/pytest_runner.img}"
 
 cd "${REPO_DIR}"
 
@@ -32,11 +38,11 @@ fi
 echo "============================================================"
 echo "structure-prediction-benchmarking — pytest"
 echo "Repo:      ${REPO_DIR}"
-echo "Container: ${BENCHMARK_IMG}"
+echo "Container: ${CONTAINER}"
 echo "Args:      $*"
 echo "Date:      $(date)"
 echo "Node:      $(hostname)"
 echo "============================================================"
 
-singularity exec --bind "${REPO_DIR}:${REPO_DIR}" "${BENCHMARK_IMG}" \
+singularity exec --bind "${REPO_DIR}:${REPO_DIR}" "${CONTAINER}" \
     python -m pytest "$@"
