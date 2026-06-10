@@ -3,7 +3,7 @@
 # FASTA INPUT MODE
 # =============================================================================
 # Usage:
-#   sbatch /hpc-home/jowillia/receptor_design/structure-prediction-benchmark/run_benchmark.slurm.sh ./params_fasta.yml
+#   sbatch /hpc-home/jowillia/receptor_design/structure-prediction-benchmarking/run_benchmark.slurm.sh ./params_fasta.yml
 #
 # Required: input_fasta  (a 2-entry protein FASTA: receptor then effector)
 # Optional: receptor_chain / effector_chain (synthetic chain labels, default A/B)

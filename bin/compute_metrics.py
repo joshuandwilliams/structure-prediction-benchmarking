@@ -56,7 +56,6 @@ import traceback
 
 import numpy as np
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # ipSAE (Dunbrack 2025)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1789,8 +1788,8 @@ def main():
             print(f"\nComputing structural RMSDs vs {args.reference_pdb}")
             print(f"  Reference receptor chain: {args.receptor_chain}, "
                   f"reference effector chain: {args.effector_chain}")
-            print(f"  Method: whole-fit single-pass Kabsch (primary) "
-                  f"+ matchmaker-pruned core Kabsch")
+            print("  Method: whole-fit single-pass Kabsch (primary) "
+                  "+ matchmaker-pruned core Kabsch")
             for r in results:
                 pred_pdb = r.get("pdb_path", "")
                 rmsds = compute_structural_rmsds(

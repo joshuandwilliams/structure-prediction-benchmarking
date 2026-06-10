@@ -37,7 +37,7 @@ if [ ! -f "${PARAMS_FILE}" ]; then
 fi
 
 # ── Paths ─────────────────────────────────────────────────────────────────
-PIPELINE_DIR="/hpc-home/jowillia/receptor_design/structure-prediction-benchmark"
+PIPELINE_DIR="/hpc-home/jowillia/receptor_design/structure-prediction-benchmarking"
 NEXTFLOW_IMG="/hpc-home/jowillia/singularity/NextFlow/NextFlow.img"
 
 EXPERIMENT_DIR="$(dirname "${PARAMS_FILE}")"

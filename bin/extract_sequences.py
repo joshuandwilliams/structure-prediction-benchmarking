@@ -32,7 +32,6 @@ import json
 import os
 import sys
 
-
 THREE_TO_ONE = {
     "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
     "GLN": "Q", "GLU": "E", "GLY": "G", "HIS": "H", "ILE": "I",
@@ -73,7 +72,7 @@ def extract_sequences_gemmi(path):
 
 def extract_sequences_biopython(path):
     """Fallback: extract sequences using BioPython."""
-    from Bio.PDB import PDBParser, MMCIFParser
+    from Bio.PDB import MMCIFParser, PDBParser
 
     if path.endswith(".cif") or path.endswith(".mmcif"):
         parser = MMCIFParser(QUIET=True)

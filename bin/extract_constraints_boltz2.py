@@ -16,6 +16,14 @@ Writes YAML-formatted constraint block to stdout; prints stats to stderr.
 """
 import sys
 
+from _constraint_geometry import (
+    contact_pairs,
+    format_contact_block,
+    format_pocket_block,
+    pocket_residues,
+    read_ca_by_chain,
+)
+
 
 def main():
     if len(sys.argv) != 9:
@@ -33,19 +41,9 @@ def main():
     pocket_cutoff  = float(sys.argv[7])
     pocket_max_d   = float(sys.argv[8])
 
-    rec_ca = {}
-    eff_ca = {}
-
-    with open(pdb_path) as f:
-        for line in f:
-            if line.startswith("ATOM") and line[12:16].strip() == "CA":
-                ch     = line[21]
-                resnum = int(line[22:26].strip())
-                xyz    = (float(line[30:38]), float(line[38:46]), float(line[46:54]))
-                if ch == rec_chain:
-                    rec_ca[resnum] = xyz
-                elif ch == eff_chain:
-                    eff_ca[resnum] = xyz
+    coords = read_ca_by_chain(pdb_path, chains={rec_chain, eff_chain})
+    rec_ca = coords.get(rec_chain, {})
+    eff_ca = coords.get(eff_chain, {})
 
     if not rec_ca:
         print(f"ERROR: No Cα atoms for chain {rec_chain}", file=sys.stderr)
@@ -57,30 +55,13 @@ def main():
     print(f"Receptor Cα atoms: {len(rec_ca)}", file=sys.stderr)
     print(f"Effector Cα atoms: {len(eff_ca)}", file=sys.stderr)
 
-    pocket_residues = set()
-    for r_rn, r_xyz in rec_ca.items():
-        for e_xyz in eff_ca.values():
-            d = sum((a - b) ** 2 for a, b in zip(r_xyz, e_xyz)) ** 0.5
-            if d <= pocket_cutoff:
-                pocket_residues.add(r_rn)
-                break
-
-    pocket_residues = sorted(pocket_residues)
-    print(f"Pocket residues:   {len(pocket_residues)} (within {pocket_cutoff} Å)",
+    pocket = pocket_residues(rec_ca, eff_ca, pocket_cutoff)
+    print(f"Pocket residues:   {len(pocket)} (within {pocket_cutoff} Å)",
           file=sys.stderr)
-    if pocket_residues:
-        print(f"  Range: {min(pocket_residues)}-{max(pocket_residues)}", file=sys.stderr)
+    if pocket:
+        print(f"  Range: {min(pocket)}-{max(pocket)}", file=sys.stderr)
 
-    contacts = []
-    for r_rn, r_xyz in rec_ca.items():
-        for e_rn, e_xyz in eff_ca.items():
-            d = sum((a - b) ** 2 for a, b in zip(r_xyz, e_xyz)) ** 0.5
-            if d <= contact_cutoff:
-                contacts.append((r_rn, e_rn, d))
-
-    contacts.sort(key=lambda x: x[2])
-    contacts = contacts[:contact_max]
-
+    contacts = contact_pairs(rec_ca, eff_ca, contact_cutoff, contact_max)
     print(f"Contact pairs:     {len(contacts)} (within {contact_cutoff} Å, capped at {contact_max})",
           file=sys.stderr)
     if contacts:
@@ -89,27 +70,18 @@ def main():
         print(f"  Widest:  {rec_chain}{contacts[-1][0]}-{eff_chain}{contacts[-1][1]}: {contacts[-1][2]:.1f} A",
               file=sys.stderr)
 
-    if not pocket_residues and not contacts:
+    if not pocket and not contacts:
         print("ERROR: No constraints generated. Check chain IDs.", file=sys.stderr)
         sys.exit(1)
 
     print("constraints:")
 
-    if pocket_residues:
-        contacts_str = ", ".join(f"[{rec_chain}, {r}]" for r in pocket_residues)
-        print(f"  - pocket:")
-        print(f"      binder: {eff_chain}")
-        print(f"      contacts: [{contacts_str}]")
-        print(f"      max_distance: {pocket_max_d}")
-        print(f"      force: true")
+    if pocket:
+        print(format_pocket_block(rec_chain, eff_chain, pocket, pocket_max_d))
 
     for r_rn, e_rn, d in contacts:
         max_d = round(d + contact_tol, 1)
-        print(f"  - contact:")
-        print(f"      token1: [{rec_chain}, {r_rn}]")
-        print(f"      token2: [{eff_chain}, {e_rn}]")
-        print(f"      max_distance: {max_d}")
-        print(f"      force: true")
+        print(format_contact_block(rec_chain, eff_chain, r_rn, e_rn, max_d))
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 # Example parameters — Structure Prediction Benchmark Pipeline v0.1.0
 # =============================================================================
 # Usage:
-#   sbatch /hpc-home/jowillia/receptor_design/structure-prediction-benchmark/run_benchmark.slurm.sh ./params.yml
+#   sbatch /hpc-home/jowillia/receptor_design/structure-prediction-benchmarking/run_benchmark.slurm.sh ./params.yml
 #
 # Required: reference_pdb, receptor_chain, effector_chain
 # Optional: models (list of model names to run — defaults to all)

@@ -40,7 +40,6 @@ import os
 import re
 import sys
 
-
 # Standard 20 + Sec/Pyl + ambiguity codes accepted in protein FASTAs.
 VALID_AA = set("ACDEFGHIKLMNPQRSTVWYUOBZXJ*-")
 
