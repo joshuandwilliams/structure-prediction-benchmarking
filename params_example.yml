@@ -1,0 +1,68 @@
+# =============================================================================
+# Example parameters — Structure Prediction Benchmark Pipeline v0.1.0
+# =============================================================================
+# Usage:
+#   sbatch /hpc-home/jowillia/receptor_design/structure-prediction-benchmark/run_benchmark.slurm.sh ./params.yml
+#
+# Required: reference_pdb, receptor_chain, effector_chain
+# Optional: models (list of model names to run — defaults to all)
+# =============================================================================
+
+
+# ── Project ───────────────────────────────────────────────────────────
+project_name: "boltz1_smoketest2"
+outdir: "./smoketest_results2"
+
+
+# ── Reference complex ─────────────────────────────────────────────────
+# A single PDB file containing both the receptor and effector chains
+# with their experimental coordinates.  compute_metrics.py uses this
+# for RMSD / DockQ / interface metrics.
+reference_pdb: "./6G10.pdb"
+
+# Chain IDs in the reference PDB.  These must match actual chain letters
+# present in the file.  For 7B1I: receptor=B, effector=C.
+# For 6G10 (Pik-1/AVR-PikD): receptor=A, effector=B.
+receptor_chain: "B"
+effector_chain: "C"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# MODEL SELECTION
+# ═════════════════════════════════════════════════════════════════════════
+# Uncomment and edit to run a subset.  If omitted entirely, all 12 models
+# run by default.  Valid names:
+#
+#   boltz1               boltz1_msa             boltz1_constrained
+#   boltz2               boltz2_msa             boltz2_constrained
+#   chai1                af2m
+#   af3                  af3_nomsa
+#   colabfold            colabfold_nomsa
+#
+# Note: selecting boltz1_msa, boltz2_msa, or colabfold triggers the shared
+# COLABFOLD_SEARCH step (run once, reused across them).  Selecting af3 or
+# af3_nomsa triggers the AF3_SETUP_DB step (also run once).
+#
+models:
+   - boltz1
+
+# ═════════════════════════════════════════════════════════════════════════
+# INFRASTRUCTURE PATHS  (defaults match the NBI/JIC cluster layout)
+# ═════════════════════════════════════════════════════════════════════════
+# Override only if your containers/databases live elsewhere.
+#
+# benchmark_container: "/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/benchmark_models.img"
+# colabfold_container: "/hpc-home/jowillia/singularity/ColabFold/colabfold.img"
+# colabfold_db:        "/nbi/Reference-Data/AlphaFold/colabfold_databases"
+# af2_data_dir:        "/nbi/Reference-Data/AlphaFold/db-v2.3.2"
+# af3_db_v3:           "/nbi/Reference-Data/AlphaFold/db-v3.0.0"
+# af3_model_dir:       "/hpc-home/jowillia/singularity/AlphaFold3"
+# af2_package_id:      "be036146-04b2-42a1-b7f8-26af883f2281"
+# af3_package_id:      "e8edb411-7374-4342-b9f1-408da41fc197"
+
+# ── GPU concurrency ──────────────────────────────────────────────────────
+# How many GPU jobs of any one model may run simultaneously.  The jic-gpu
+# queue at NBI is small, so 1 is usually the right answer: different
+# models still run in parallel, and seeds inside a model are already
+# serial.
+# max_gpu_parallel: 1
