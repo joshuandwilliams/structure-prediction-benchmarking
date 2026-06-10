@@ -1,0 +1,109 @@
+# ============================================================
+# .gitignore for structure-prediction-benchmarking
+# ============================================================
+
+# ----- Nextflow -----
+.nextflow/
+.nextflow.log*
+.nextflow.history*
+work/
+tests/*/work/
+tests/*/tmp/
+
+# ----- Pipeline outputs -----
+# The default outdir is "${project_name}_results"; any *_results tree is a
+# run artefact and never tracked.
+*_results/
+results/
+tests/*/results/
+
+# ----- SLURM logs -----
+*.out
+*.err
+slurm-*.out
+slurm-*.err
+nextflow_benchmark_*.out
+nextflow_benchmark_*.err
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ----- Jupyter -----
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ----- macOS -----
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ----- Microsoft Office lock files -----
+~$*
+
+# ----- Editors / IDEs -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ----- Environment / secrets -----
+.env
+.env.local
+*.local
+
+# ----- Build / packaging artifacts -----
+build/
+dist/
+*.egg
+.eggs/
+
+# ----- Java / JDK + Nextflow runtime (bundled on HPC, never tracked) -----
+jdk-*/
+*.class
+*.jar
+nxf_home/
+
+# ----- Singularity / Apptainer images -----
+# Container images are multi-GB and live on the HPC, not in git.
+# Definition files (containers/*.def) ARE tracked.
+*.img
+*.sif
+
+# ----- Experiments — benchmark run outputs -----
+# Each experiments/<target>/ holds tracked inputs (params.yml, reference
+# PDB) but its run output tree and Nextflow scratch are HPC-side only.
+experiments/*/*_results/
+experiments/*/results/
+experiments/*/work/
+experiments/*/tmp/
+experiments/*/.nextflow*
+experiments/*/*.out
+experiments/*/*.err
+
+# ----- Archive / scratch -----
+archive/
+scratch/
+
+# ----- Sync helper artefacts -----
+rsync_dryrun*.txt
+rsync_deletions*.txt
+
+# ----- OS / misc -----
+Thumbs.db
+desktop.ini

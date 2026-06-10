@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "structure-prediction-benchmarking"
+version = "0.1.0"
+description = "Benchmark protein-complex structure predictors (Boltz-1/2, Chai-1, AF2-Multimer, AlphaFold 3, ColabFold) against reference complexes (Nextflow + Python)."
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+# Dependencies needed to run the local_unit / local_integration test tiers on
+# a laptop (no HPC, no GPU). gemmi/biopython power the PDB/mmCIF parsing in
+# bin/extract_sequences.py and bin/compute_metrics.py; pyyaml powers
+# bin/validate_boltz_yaml.py. numpy powers the ipSAE / RMSD maths.
+test = [
+    "pytest>=7.0",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "PyYAML>=6.0",
+    "gemmi>=0.6",
+    "biopython>=1.81",
+]
+experiments = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "matplotlib>=3.7",
+]
+
+[tool.setuptools]
+# bin/ scripts are invoked standalone by Nextflow, not imported as a package.
+packages = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers -ra"
+markers = [
+    "local_unit: tier — unit tests of pure helpers (ipSAE/RMSD maths, constraint extraction, FASTA/YAML parsing); <1s each; runs on a laptop.",
+    "local_integration: tier — pure-Python characterization on saved prediction fixtures; runs on Mac without HPC or GPU.",
+    "hpc: tier — requires a fresh pipeline run on the cluster (containers + GPU); HPC-only.",
+    "slow: long-running test.",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Pragmatic default set; bin/ scripts favour readability over strictness.
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # long lines tolerated in metric tables / docstrings
