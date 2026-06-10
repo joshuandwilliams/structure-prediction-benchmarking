@@ -1,0 +1,37 @@
+# =============================================================================
+# 7QZD benchmark — all 12 models
+# Pik-1 HMA + AVR-PikD complex (Maqbool et al. 2015)
+# =============================================================================
+
+
+# ── Project ───────────────────────────────────────────────────────────
+project_name: "7QZD_all_models"
+outdir: "./7QZD_all_models_results"
+
+
+# ── Reference complex ─────────────────────────────────────────────────
+# 6G10 has three chains:
+#   A — HMA domain copy 1 (crystal packing, not bound)
+#   B — HMA domain copy 2 (bound to AVR-PikD — the biologically relevant one)
+#   C — AVR-PikD effector
+reference_pdb: "./7QZD.pdb"
+receptor_chain: "A"
+effector_chain: "C"
+
+
+# ── Models ────────────────────────────────────────────────────────────
+# All 12 predictors. boltz1_msa / boltz2_msa / colabfold share the
+# COLABFOLD_SEARCH step (runs once). af3 / af3_nomsa share AF3_SETUP_DB.
+models:
+  - boltz1
+  - boltz1_msa
+  - boltz1_constrained
+  - boltz2
+  - boltz2_msa
+  - boltz2_constrained
+  - chai1
+  - af2m
+  - af3
+  - af3_nomsa
+  - colabfold
+  - colabfold_nomsa
