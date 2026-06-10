@@ -30,7 +30,7 @@ effector_chain: "C"
 # ═════════════════════════════════════════════════════════════════════════
 # MODEL SELECTION
 # ═════════════════════════════════════════════════════════════════════════
-# Uncomment and edit to run a subset.  If omitted entirely, all 12 models
+# Uncomment and edit to run a subset.  If omitted entirely, all 13 models
 # run by default.  Valid names:
 #
 #   boltz1               boltz1_msa             boltz1_constrained
@@ -38,10 +38,12 @@ effector_chain: "C"
 #   chai1                af2m
 #   af3                  af3_nomsa
 #   colabfold            colabfold_nomsa
+#   esmfold2
 #
 # Note: selecting boltz1_msa, boltz2_msa, or colabfold triggers the shared
 # COLABFOLD_SEARCH step (run once, reused across them).  Selecting af3 or
-# af3_nomsa triggers the AF3_SETUP_DB step (also run once).
+# af3_nomsa triggers the AF3_SETUP_DB step (also run once).  esmfold2 is
+# single-sequence (no MSA) and needs a 40 GB+ GPU.
 #
 models:
    - boltz1
@@ -53,6 +55,7 @@ models:
 #
 # benchmark_container: "/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/Boltz1_Boltz2_Chai1.img"
 # colabfold_container: "/hpc-home/jowillia/singularity/ColabFold/colabfold.img"
+# esmfold2_container:  "/hpc-home/jowillia/singularity/ESMFold2/esmfold2.img"
 # colabfold_db:        "/nbi/Reference-Data/AlphaFold/colabfold_databases"
 # af2_data_dir:        "/nbi/Reference-Data/AlphaFold/db-v2.3.2"
 # af3_db_v3:           "/nbi/Reference-Data/AlphaFold/db-v3.0.0"

@@ -18,6 +18,7 @@ and can be overridden per-run in the params file:
 |---|---|---|
 | `benchmark_container` | `…/Boltz1_Boltz2_Chai1_ColabFold/Boltz1_Boltz2_Chai1.img` | Boltz-1, Boltz-2, Chai-1, sequence/constraint/metrics Python |
 | `colabfold_container` | `…/ColabFold/colabfold.img` | `COLABFOLD_SEARCH`, ColabFold predictions |
+| `esmfold2_container` | `…/ESMFold2/esmfold2.img` | ESMFold2 (`bin/esmfold2_fold.py`); needs a 40 GB+ GPU |
 
 AlphaFold 2-Multimer and AlphaFold 3 are **not** containerised here — they
 load from the NBI HPC `source package` system via the `af2_package_id` /

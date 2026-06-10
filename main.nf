@@ -14,6 +14,7 @@
  *   AlphaFold2-Multimer (with MSA)
  *   AlphaFold 3, AlphaFold 3 (no MSA)
  *   ColabFold, ColabFold (no MSA)
+ *   ESMFold2 (single-sequence; diffusion complex predictor)
  *
  * Each model writes predictions + metrics to ${outdir}/<model>/.  The
  * shared ColabFold MSA is computed once and reused by every model that
@@ -70,6 +71,7 @@ params.models           = null
 // Containers
 params.benchmark_container = "/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/Boltz1_Boltz2_Chai1.img"
 params.colabfold_container = "/hpc-home/jowillia/singularity/ColabFold/colabfold.img"
+params.esmfold2_container  = "/hpc-home/jowillia/singularity/ESMFold2/esmfold2.img"
 
 // Databases
 params.colabfold_db     = "/nbi/Reference-Data/AlphaFold/colabfold_databases"
@@ -142,6 +144,7 @@ def ALL_MODELS = [
     'af3_nomsa',           // parser: af3
     'colabfold',           // parser: colabfold
     'colabfold_nomsa',     // parser: colabfold
+    'esmfold2',            // parser: esmfold2 (single-sequence diffusion complex predictor)
 ]
 
 def MODEL_TO_PARSER = [
@@ -157,6 +160,7 @@ def MODEL_TO_PARSER = [
     'af3_nomsa'          : 'af3',
     'colabfold'          : 'colabfold',
     'colabfold_nomsa'    : 'colabfold',
+    'esmfold2'           : 'esmfold2',
 ]
 
 def SELECTED_MODELS
@@ -229,6 +233,8 @@ include { AF3_NOMSA               } from './modules/af3'
 include { COLABFOLD               } from './modules/colabfold'
 include { COLABFOLD_NOMSA         } from './modules/colabfold'
 
+include { ESMFOLD2                } from './modules/esmfold2'
+
 // Metrics: one aliased instance per model so publishDir subdirs stay distinct
 include { COMPUTE_METRICS as METRICS_BOLTZ1              } from './modules/metrics'
 include { COMPUTE_METRICS as METRICS_BOLTZ1_MSA          } from './modules/metrics'
@@ -242,6 +248,7 @@ include { COMPUTE_METRICS as METRICS_AF3                 } from './modules/metri
 include { COMPUTE_METRICS as METRICS_AF3_NOMSA           } from './modules/metrics'
 include { COMPUTE_METRICS as METRICS_COLABFOLD           } from './modules/metrics'
 include { COMPUTE_METRICS as METRICS_COLABFOLD_NOMSA     } from './modules/metrics'
+include { COMPUTE_METRICS as METRICS_ESMFOLD2            } from './modules/metrics'
 
 include { AGGREGATE_RESULTS       } from './modules/aggregate'
 
@@ -569,6 +576,23 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_COLABFOLD_NOMSA.out.tagged_best_dir)
     }
 
+    // ── ESMFOLD2 ────────────────────────────────────────────────────────
+    // Single-sequence diffusion complex predictor; no MSA / no shared deps.
+    if ('esmfold2' in SELECTED_MODELS) {
+        ESMFOLD2(
+            receptor_seq_ch, effector_seq_ch,
+            params.receptor_chain, params.effector_chain
+        )
+        METRICS_ESMFOLD2(
+            build_metric_input('esmfold2', MODEL_TO_PARSER['esmfold2'],
+                ESMFOLD2.out.prediction_dir,
+                ref_pdb_ch, chain_a_len_ch, chain_b_len_ch,
+                params.receptor_chain, params.effector_chain)
+        )
+        all_tagged_metrics = all_tagged_metrics.mix(METRICS_ESMFOLD2.out.tagged_metrics)
+        all_tagged_best    = all_tagged_best.mix(METRICS_ESMFOLD2.out.tagged_best_dir)
+    }
+
     // =====================================================================
     // Stage 4: Aggregate
     // =====================================================================
@@ -598,6 +622,7 @@ workflow.onComplete {
         'CHAI1', 'AF2M',
         'AF3', 'AF3_NOMSA',
         'COLABFOLD', 'COLABFOLD_NOMSA',
+        'ESMFOLD2',
     ] as Set
 
     // Parse Nextflow-formatted memory strings like "6.5 GB" / "120 MB"

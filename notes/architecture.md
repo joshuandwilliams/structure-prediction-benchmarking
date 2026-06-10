@@ -57,9 +57,15 @@ outputs into a single `all_outputs/<seed_tag>/…` staging tree that
 `compute_metrics.py` globs recursively. `boltz predict` exits 0 even on
 silent parse failures, so each seed is guarded by a "produced ≥1 PDB" check.
 
-The aggregation step is shared: every Boltz/Chai process calls
+The aggregation step is shared: every Boltz/Chai/ESMFold2 process calls
 `bin/aggregate_seed_outputs.sh <ext...>` (Boltz keeps `pdb npz json`; Chai-1
-additionally keeps `pt`) instead of carrying its own copy of the loop.
+additionally keeps `pt`; ESMFold2 keeps `cif json`) instead of carrying its
+own copy of the loop.
+
+ESMFold2 is single-sequence (no MSA, like the Boltz baselines) but natively
+predicts complexes; its per-seed fold runs in `bin/esmfold2_fold.py` and emits
+`esmfold2_pred.cif` + a `confidences.json` that `parse_esmfold2` reads the way
+`parse_af3` reads AF3's confidences.
 
 ## Constraints (Boltz only)
 

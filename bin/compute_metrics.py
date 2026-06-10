@@ -1652,6 +1652,69 @@ def parse_colabfold(pred_dir, chain_lengths):
 # Main
 # ═══════════════════════════════════════════════════════════════════════════
 
+def parse_esmfold2(pred_dir, chain_lengths):
+    """
+    Parse ESMFold2 outputs.
+
+    modules/esmfold2.nf writes, per seed, into the aggregated staging tree:
+
+        all_outputs/<seed_tag>/esmfold2_pred.cif      predicted complex (mmCIF)
+        all_outputs/<seed_tag>/confidences.json       {plddt:[0-100], ptm, iptm?, pae?}
+
+    pLDDT is already rescaled to 0-100 by bin/esmfold2_fold.py. ipTM / PAE are
+    present only if the model exposes them; when absent, the interface metrics
+    fall back to 0 exactly as for any other model without a PAE matrix. The
+    confidences.json layout mirrors AF3's, so this parser is a close cousin of
+    parse_af3.
+    """
+    results = []
+
+    cif_files = sorted(glob.glob(os.path.join(pred_dir, "**", "*.cif"), recursive=True))
+    cif_files = [p for p in cif_files if not _is_reference(p)]
+
+    for cif_path in cif_files:
+        base = os.path.dirname(cif_path)
+        name = os.path.relpath(cif_path, pred_dir).replace(os.sep, "_").rsplit(".", 1)[0]
+        entry = {"pdb_path": cif_path, "model_name": name}
+
+        pae_matrix = None
+        conf_path = os.path.join(base, "confidences.json")
+        if os.path.exists(conf_path):
+            try:
+                with open(conf_path) as f:
+                    cdata = json.load(f)
+                if "plddt" in cdata:
+                    val = cdata["plddt"]
+                    entry["avg_plddt"] = round(
+                        float(np.mean(val) if isinstance(val, list) else val), 2)
+                if "ptm" in cdata:
+                    entry["ptm"] = round(float(cdata["ptm"]), 4)
+                if "iptm" in cdata:
+                    entry["iptm"] = round(float(cdata["iptm"]), 4)
+                pae_raw = cdata.get("pae")
+                if isinstance(pae_raw, list) and pae_raw and isinstance(pae_raw[0], list):
+                    pae_matrix = np.array(pae_raw, dtype=np.float32)
+                    if chain_lengths:
+                        expected = sum(chain_lengths)
+                        if pae_matrix.shape[0] > expected:
+                            pae_matrix = pae_matrix[:expected, :expected]
+                        elif pae_matrix.shape[0] < expected:
+                            pae_matrix = None  # too small — discard rather than guess
+            except Exception as e:
+                print(f"  WARNING: ESMFold2 confidences parse failed for {conf_path}: {e}")
+
+        if "avg_plddt" not in entry:
+            entry["avg_plddt"] = plddt_from_cif(cif_path)
+
+        _finalize_entry(entry, pae_matrix, chain_lengths)
+        results.append(entry)
+
+    if not results:
+        print(f"  WARNING: No ESMFold2 predictions found in {pred_dir}")
+
+    return results
+
+
 PARSERS = {
     "boltz2": parse_boltz2,
     "boltz2_constrained": parse_boltz2,  # same output format; pocket + contact constraints
@@ -1663,6 +1726,7 @@ PARSERS = {
     "af3": parse_af3,
     "af3_nomsa": parse_af3,              # same output format, no MSA/template search
     "colabfold": parse_colabfold,
+    "esmfold2": parse_esmfold2,          # single-sequence diffusion complex predictor
 }
 
 CSV_FIELDS = [

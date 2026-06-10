@@ -17,6 +17,7 @@ best model from each predictor.
 | AlphaFold2-Multimer | baseline (`af2m`) | full AF2 search |
 | AlphaFold 3 | `af3`, `af3_nomsa` | full AF3 search / none |
 | ColabFold | `colabfold`, `colabfold_nomsa` | shared ColabFold / none |
+| ESMFold2 | `esmfold2` | none (single-sequence) |
 
 The shared ColabFold MSA (`COLABFOLD_SEARCH`) is computed **once** and
 reused by every model that needs it (`boltz1_msa`, `boltz2_msa`,
