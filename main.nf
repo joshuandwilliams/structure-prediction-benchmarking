@@ -190,8 +190,10 @@ if (params.models == null) {
     SELECTED_MODELS = requested
 }
 
-def needs_shared_msa = SELECTED_MODELS.any { it in ['boltz1_msa', 'boltz2_msa', 'colabfold'] }
-def needs_af3_db     = SELECTED_MODELS.any { it in ['af3', 'af3_nomsa'] }
+def needs_shared_msa      = SELECTED_MODELS.any { it in ['boltz1_msa', 'boltz2_msa', 'colabfold'] }
+def needs_af3_db          = SELECTED_MODELS.any { it in ['af3', 'af3_nomsa'] }
+def needs_eff_template    = INPUT_MODE == 'pdb' &&
+                            SELECTED_MODELS.any { it in ['af3', 'af3_nomsa', 'colabfold', 'colabfold_nomsa'] }
 
 log.info """
 =============================================================
@@ -216,9 +218,10 @@ ${ INPUT_MODE == 'fasta' ? 'NOTE: FASTA mode — structural RMSD/DockQ skipped, 
 // Include modules
 // ---------------------------------------------------------------------------
 
-include { EXTRACT_SEQUENCES       } from './modules/preprocessing'
+include { EXTRACT_SEQUENCES            } from './modules/preprocessing'
+include { EXTRACT_EFFECTOR_TEMPLATE    } from './modules/preprocessing'
 include { EXTRACT_SEQUENCES_FROM_FASTA } from './modules/preprocessing_fasta'
-include { COLABFOLD_SEARCH        } from './modules/msa'
+include { COLABFOLD_SEARCH             } from './modules/msa'
 
 include { BOLTZ1                  } from './modules/boltz1'
 include { BOLTZ1_MSA              } from './modules/boltz1'
@@ -362,6 +365,30 @@ workflow {
     // every metric alias.  In FASTA mode this is a comment-only stub and
     // compute_metrics.py will fall through to confidence-only metrics.
     ref_pdb_ch = reference_pdb_src_ch.first()
+
+    // =====================================================================
+    // Stage 0b (conditional): extract effector structural template
+    // =====================================================================
+    //
+    // PDB mode only, and only when AF3 or ColabFold variants are selected.
+    // AF3 uses the mmCIF form (injected into the JSON template block).
+    // ColabFold uses the PDB form (--custom-template-path).
+    // In FASTA mode or when no template-capable model is selected, the
+    // sentinel file (empty, zero bytes) is passed instead — processes check
+    // with `[ -s ]` and skip template injection when the file is empty.
+    //
+    // AF2M note: run_alphafold.py has no custom-template-path flag; AF2M
+    // templates come from its built-in database search (cutoff 2020-05-14).
+
+    def no_template_sentinel = Channel.value(file("${projectDir}/bin/no_template.sentinel"))
+    def effector_template_pdb_ch = no_template_sentinel
+    def effector_template_cif_ch = no_template_sentinel
+
+    if (needs_eff_template) {
+        EXTRACT_EFFECTOR_TEMPLATE(ref_pdb_ch, params.effector_chain)
+        effector_template_pdb_ch = EXTRACT_EFFECTOR_TEMPLATE.out.template_pdb.first()
+        effector_template_cif_ch = EXTRACT_EFFECTOR_TEMPLATE.out.template_cif.first()
+    }
 
     // =====================================================================
     // Stage 1 (conditional): shared ColabFold MSA
@@ -528,7 +555,8 @@ workflow {
     if ('af3' in SELECTED_MODELS) {
         AF3(
             receptor_seq_ch, effector_seq_ch,
-            af3_db_dir_ch, af3_db_flag_ch
+            af3_db_dir_ch, af3_db_flag_ch,
+            effector_template_cif_ch
         )
         METRICS_AF3(
             build_metric_input('af3', MODEL_TO_PARSER['af3'],
@@ -544,7 +572,8 @@ workflow {
     if ('af3_nomsa' in SELECTED_MODELS) {
         AF3_NOMSA(
             receptor_seq_ch, effector_seq_ch,
-            af3_db_dir_ch, af3_db_flag_ch
+            af3_db_dir_ch, af3_db_flag_ch,
+            effector_template_cif_ch
         )
         METRICS_AF3_NOMSA(
             build_metric_input('af3_nomsa', MODEL_TO_PARSER['af3_nomsa'],
@@ -558,7 +587,7 @@ workflow {
 
     // ── COLABFOLD ───────────────────────────────────────────────────────
     if ('colabfold' in SELECTED_MODELS) {
-        COLABFOLD(shared_complex_a3m_ch)
+        COLABFOLD(shared_complex_a3m_ch, effector_template_pdb_ch)
         METRICS_COLABFOLD(
             build_metric_input('colabfold', MODEL_TO_PARSER['colabfold'],
                 COLABFOLD.out.prediction_dir,
@@ -571,7 +600,7 @@ workflow {
 
     // ── COLABFOLD_NOMSA ─────────────────────────────────────────────────
     if ('colabfold_nomsa' in SELECTED_MODELS) {
-        COLABFOLD_NOMSA(receptor_seq_ch, effector_seq_ch)
+        COLABFOLD_NOMSA(receptor_seq_ch, effector_seq_ch, effector_template_pdb_ch)
         METRICS_COLABFOLD_NOMSA(
             build_metric_input('colabfold_nomsa', MODEL_TO_PARSER['colabfold_nomsa'],
                 COLABFOLD_NOMSA.out.prediction_dir,

@@ -50,3 +50,39 @@ process EXTRACT_SEQUENCES {
             --chains ${receptor_chain} ${effector_chain}
     """
 }
+
+
+/*
+ * EXTRACT_EFFECTOR_TEMPLATE
+ * -------------------------
+ * Extract the effector chain from the reference PDB and write it as both
+ * PDB and mmCIF for use as a structural template in AF3 and ColabFold.
+ * Only runs in PDB input mode; FASTA mode passes a no-template sentinel.
+ *
+ * The extracted chain is relabelled to chain A (single-chain convention).
+ * AF3 uses the mmCIF form embedded in the JSON template block; ColabFold
+ * uses the PDB form via --custom-template-path.
+ */
+process EXTRACT_EFFECTOR_TEMPLATE {
+    tag "${params.project_name}"
+    label 'cpu'
+
+    publishDir "${params.outdir}", mode: 'copy',
+        pattern: 'effector_template.*'
+
+    input:
+    path ref_pdb
+    val  effector_chain
+
+    output:
+    path "effector_template.pdb", emit: template_pdb
+    path "effector_template.cif", emit: template_cif
+
+    script:
+    """
+    singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
+        python ${projectDir}/bin/extract_effector_template.py \\
+            ${ref_pdb} \\
+            ${effector_chain}
+    """
+}

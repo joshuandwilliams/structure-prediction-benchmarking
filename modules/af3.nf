@@ -95,6 +95,14 @@ process AF3_SETUP_DB {
  * AF3
  * ---
  * AlphaFold 3 with full data pipeline (MSA + template search).
+ * The effector structural template is injected into the JSON so AF3 uses
+ * it for the effector chain instead of searching PDB — comparable to the
+ * negative-steering workflow which also provides the effector structure.
+ * The receptor chain still gets full MSA + template treatment.
+ * In FASTA mode, effector_template_cif is an empty sentinel (no injection).
+ *
+ * Note: AF2M cannot inject custom templates via its CLI; its templates
+ * are limited to structures deposited before 2020-05-14.
  */
 process AF3 {
     tag "${params.project_name}"
@@ -108,6 +116,7 @@ process AF3 {
     val  effector_seq
     val  af3_db_dir
     path db_ready_flag
+    path effector_template_cif
 
     output:
     path "output",      emit: prediction_dir
@@ -123,32 +132,15 @@ process AF3 {
 
     mkdir -p output
 
-    # ─── Load AF3 environment ─────────────────────────────────────────────
-    source package ${params.af3_package_id}
+    # ─── Generate AF3 JSON (with effector template if available) ─────────
+    singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
+        python ${projectDir}/bin/af3_input.py \\
+            "${receptor_seq}" "${effector_seq}" full \\
+            --template ${effector_template_cif} \\
+            --output input.json
 
-    # ─── Write AF3 JSON input ─────────────────────────────────────────────
-    cat > input.json << EOF
-{
-  "name": "benchmark_test",
-  "modelSeeds": [42, 123, 456, 789, 1024],
-  "dialect": "alphafold3",
-  "version": 1,
-  "sequences": [
-    {
-      "protein": {
-        "id": "A",
-        "sequence": "${receptor_seq}"
-      }
-    },
-    {
-      "protein": {
-        "id": "B",
-        "sequence": "${effector_seq}"
-      }
-    }
-  ]
-}
-EOF
+    # ─── Load AF3 environment and run ────────────────────────────────────
+    source package ${params.af3_package_id}
 
     echo "Running AlphaFold 3 prediction..."
 
@@ -167,9 +159,9 @@ EOF
 /*
  * AF3_NOMSA
  * ---------
- * AlphaFold 3 in single-sequence mode (--norun_data_pipeline + empty
- * unpairedMsa / pairedMsa / templates fields).  Runs inference only on
- * GPU; no MSA or template search is performed.
+ * AlphaFold 3 with --norun_data_pipeline: empty MSA, no PDB template search.
+ * The effector structural template is still injected if available — giving
+ * inference-only folding guided by the known effector structure but no MSA.
  */
 process AF3_NOMSA {
     tag "${params.project_name}"
@@ -183,6 +175,7 @@ process AF3_NOMSA {
     val  effector_seq
     val  af3_db_dir
     path db_ready_flag
+    path effector_template_cif
 
     output:
     path "output",      emit: prediction_dir
@@ -198,37 +191,14 @@ process AF3_NOMSA {
 
     mkdir -p output
 
-    source package ${params.af3_package_id}
+    # ─── Generate AF3 JSON (no MSA; effector template if available) ───────
+    singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
+        python ${projectDir}/bin/af3_input.py \\
+            "${receptor_seq}" "${effector_seq}" nomsa \\
+            --template ${effector_template_cif} \\
+            --output input.json
 
-    # ─── AF3 JSON with empty MSA + no templates ───────────────────────────
-    cat > input.json << EOF
-{
-  "name": "benchmark_test",
-  "modelSeeds": [42, 123, 456, 789, 1024],
-  "dialect": "alphafold3",
-  "version": 1,
-  "sequences": [
-    {
-      "protein": {
-        "id": "A",
-        "sequence": "${receptor_seq}",
-        "unpairedMsa": "",
-        "pairedMsa": "",
-        "templates": []
-      }
-    },
-    {
-      "protein": {
-        "id": "B",
-        "sequence": "${effector_seq}",
-        "unpairedMsa": "",
-        "pairedMsa": "",
-        "templates": []
-      }
-    }
-  ]
-}
-EOF
+    source package ${params.af3_package_id}
 
     echo "Running AlphaFold 3 prediction (no MSA, inference only)..."
 
