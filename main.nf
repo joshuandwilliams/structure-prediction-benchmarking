@@ -369,9 +369,10 @@ workflow {
 
     if (needs_shared_msa) {
         COLABFOLD_SEARCH(receptor_seq_ch, effector_seq_ch)
-        shared_msa_dir_ch = COLABFOLD_SEARCH.out.msa_dir.first()
-        shared_a3m_a_ch   = COLABFOLD_SEARCH.out.chain_a_a3m.first()
-        shared_a3m_b_ch   = COLABFOLD_SEARCH.out.chain_b_a3m.first()
+        shared_msa_dir_ch     = COLABFOLD_SEARCH.out.msa_dir.first()
+        shared_a3m_a_ch       = COLABFOLD_SEARCH.out.chain_a_a3m.first()
+        shared_a3m_b_ch       = COLABFOLD_SEARCH.out.chain_b_a3m.first()
+        shared_complex_a3m_ch = COLABFOLD_SEARCH.out.complex_a3m.first()
     }
 
     // =====================================================================
@@ -557,7 +558,7 @@ workflow {
 
     // ── COLABFOLD ───────────────────────────────────────────────────────
     if ('colabfold' in SELECTED_MODELS) {
-        COLABFOLD(shared_msa_dir_ch)
+        COLABFOLD(shared_complex_a3m_ch)
         METRICS_COLABFOLD(
             build_metric_input('colabfold', MODEL_TO_PARSER['colabfold'],
                 COLABFOLD.out.prediction_dir,

@@ -4,10 +4,10 @@
  * =============================================================================
  * Two variants sharing colabfold.img:
  *
- *   COLABFOLD        — uses the shared COLABFOLD_SEARCH a3m MSAs as input
- *                      to colabfold_batch.  Because colabfold_batch accepts
- *                      a directory of a3m files as input, we stage the
- *                      shared msa/ dir from COLABFOLD_SEARCH directly.
+ *   COLABFOLD        — folds the complex from the shared COLABFOLD_SEARCH
+ *                      PAIRED complex a3m (complex.a3m). A single complex a3m
+ *                      (not the per-chain dir) is required, else colabfold_batch
+ *                      folds each chain as a separate monomer.
  *   COLABFOLD_NOMSA  — runs colabfold_batch with --msa-mode single_sequence,
  *                      skipping all MSA search entirely.  Takes a FASTA
  *                      directly (no upstream COLABFOLD_SEARCH).
@@ -20,7 +20,10 @@
  * COLABFOLD
  * ---------
  * ColabFold prediction using the shared MMseqs2 MSAs produced by
- * COLABFOLD_SEARCH.  colabfold_batch reads a directory of a3m files.
+ * COLABFOLD_SEARCH.  Input is the single PAIRED complex a3m (complex.a3m),
+ * NOT the per-chain directory — handing colabfold_batch a directory of two
+ * a3m files makes it fold each chain as a separate monomer instead of the
+ * complex.
  */
 process COLABFOLD {
     tag "${params.project_name}"
@@ -30,7 +33,7 @@ process COLABFOLD {
         pattern: 'output/**'
 
     input:
-    path msa_dir    // staged chain_A.a3m / chain_B.a3m directory
+    path complex_a3m    // staged paired complex a3m from COLABFOLD_SEARCH
 
     output:
     path "output",  emit: prediction_dir
@@ -41,9 +44,9 @@ process COLABFOLD {
 
     mkdir -p output
 
-    echo "=== Structure Prediction (colabfold_batch) ==="
+    echo "=== Structure Prediction (colabfold_batch, paired complex MSA) ==="
     singularity exec --nv ${params.colabfold_container} colabfold_batch \\
-        ${msa_dir} \\
+        ${complex_a3m} \\
         output \\
         --model-type alphafold2_multimer_v3 \\
         --num-models 5 \\
