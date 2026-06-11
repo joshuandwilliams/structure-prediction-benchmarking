@@ -24,6 +24,9 @@
  * BOLTZ2
  * ------
  * Unconstrained Boltz-2 baseline: single-sequence MSA, no constraints.
+ * Receives an effector structural template (CIF) in PDB mode; passes a
+ * zero-byte sentinel in FASTA mode.  --use_potentials is required for
+ * `force: true` in the template block to be enforced.
  */
 process BOLTZ2 {
     tag "${params.project_name}"
@@ -37,6 +40,8 @@ process BOLTZ2 {
     val effector_seq
     val rec_chain
     val eff_chain
+    path effector_template_cif // effector chain CIF for template block
+                               // (empty sentinel = no template, e.g. FASTA mode)
 
     output:
     path "all_outputs",  emit: prediction_dir
@@ -70,6 +75,22 @@ sequences:
       msa: \${PWD}/msa/chain_B.a3m
 YAMLEOF
 
+    # ─── Effector structural template (non-empty CIF only) ────────────────
+    # Template block is indented under the effector chain definition.
+    # chain_id = effector chain in this YAML; template_id = chain in the CIF
+    # (always 'A' since extract_effector_template.py relabels to A).
+    # force: true locks the effector fold; --use_potentials below enforces it.
+    if [ -s "${effector_template_cif}" ]; then
+        cat >> input.yaml << TEMPLEOF
+      templates:
+        - cif: \${PWD}/${effector_template_cif}
+          chain_id: ${eff_chain}
+          template_id: A
+          force: true
+          threshold: 1.0
+TEMPLEOF
+    fi
+
     echo "Input YAML:"
     cat input.yaml
     echo ""
@@ -90,6 +111,7 @@ YAMLEOF
                 --num_workers 0 \\
                 --output_format pdb \\
                 --write_full_pae \\
+                --use_potentials \\
                 --no_kernels \\
                 --override
 
@@ -137,6 +159,8 @@ process BOLTZ2_MSA {
     val  eff_chain
     path chain_a_a3m
     path chain_b_a3m
+    path effector_template_cif // effector chain CIF for template block
+                               // (empty sentinel = no template, e.g. FASTA mode)
 
     output:
     path "all_outputs",  emit: prediction_dir
@@ -158,6 +182,18 @@ sequences:
       sequence: ${effector_seq}
       msa: \${PWD}/${chain_b_a3m.name}
 YAMLEOF
+
+    # ─── Effector structural template (non-empty CIF only) ────────────────
+    if [ -s "${effector_template_cif}" ]; then
+        cat >> input.yaml << TEMPLEOF
+      templates:
+        - cif: \${PWD}/${effector_template_cif}
+          chain_id: ${eff_chain}
+          template_id: A
+          force: true
+          threshold: 1.0
+TEMPLEOF
+    fi
 
     echo "Input YAML:"
     cat input.yaml

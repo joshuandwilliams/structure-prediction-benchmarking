@@ -193,7 +193,8 @@ if (params.models == null) {
 def needs_shared_msa      = SELECTED_MODELS.any { it in ['boltz1_msa', 'boltz2_msa', 'colabfold'] }
 def needs_af3_db          = SELECTED_MODELS.any { it in ['af3', 'af3_nomsa'] }
 def needs_eff_template    = INPUT_MODE == 'pdb' &&
-                            SELECTED_MODELS.any { it in ['af3', 'af3_nomsa', 'colabfold', 'colabfold_nomsa'] }
+                            SELECTED_MODELS.any { it in ['af3', 'af3_nomsa', 'colabfold', 'colabfold_nomsa',
+                                                          'boltz2', 'boltz2_msa'] }
 
 log.info """
 =============================================================
@@ -476,7 +477,8 @@ workflow {
     if ('boltz2' in SELECTED_MODELS) {
         BOLTZ2(
             receptor_seq_ch, effector_seq_ch,
-            params.receptor_chain, params.effector_chain
+            params.receptor_chain, params.effector_chain,
+            effector_template_cif_ch
         )
         METRICS_BOLTZ2(
             build_metric_input('boltz2', MODEL_TO_PARSER['boltz2'],
@@ -493,7 +495,8 @@ workflow {
         BOLTZ2_MSA(
             receptor_seq_ch, effector_seq_ch,
             params.receptor_chain, params.effector_chain,
-            shared_a3m_a_ch, shared_a3m_b_ch
+            shared_a3m_a_ch, shared_a3m_b_ch,
+            effector_template_cif_ch
         )
         METRICS_BOLTZ2_MSA(
             build_metric_input('boltz2_msa', MODEL_TO_PARSER['boltz2_msa'],
