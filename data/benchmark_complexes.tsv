@@ -1,0 +1,44 @@
+pdb	receptor_chains	target_chains	tier	system	description
+5A6W	A,B	C	1	Pik	Pikp1-HMA / AVR-PikD
+6FU9	A,C	B,D	1	Pik	Pikm1-HMA / AVR-PikD
+6FUB	A	B	1	Pik	Pikm1-HMA / AVR-PikE
+6FUD	A	B	1	Pik	Pikm1-HMA / AVR-PikA
+6G10	A,B	C	1	Pik	Pikp1-HMA / AVR-PikD
+6G11	A,B,D,E	C,F	1	Pik	Pikp1-HMA / AVR-PikE
+6Q76	A	B	1	Pik	Pikp1-HMA / AVR-Pia
+6R8K	B	C	1	Pik	engineered Pikp1-HMA (NK-KE) / AVR-PikD
+6R8M	A,B,E,F	C,G	1	Pik	engineered Pikp1-HMA (NK-KE) / AVR-PikE
+7A8W	AAA,BBB,DDD,EEE	CCC,FFF	1	Pik	engineered Pikp1-HMA (NK-KE) / AVR-PikC
+7A8X	A,B,D,E	C,F	1	Pik	Pikh1-HMA / AVR-PikC
+7BNT	A,B	C	1	Pik	ancestral Pik1-HMA (ancHMA-Pikp) / AVR-PikD
+7QPX	A,B,D,E	C,F	1	Pik	engineered Pikp1-HMA (SNK-EKE) / AVR-PikC
+7QZD	A,B,E,F	C,G	1	Pik	engineered Pikp1-HMA (SNK-EKE) / AVR-PikF
+5ZNG	A	C	1	RGA5	RGA5-HMA / AVR1-CO39
+9IP6	A,B,E	C,D	1	RGA5	RGA5-HMA8 / AVR1-CO39
+9IMU	A	C	1	RGA5	RGA5-HMA8 / AVR-PikD
+8B2R	A	B	1	RGA5	engineered RGA5-HMA mutant / AVR-PikF
+7XVG	A	B	2	Sr35	Sr35 (CNL) / AvrSr35 binary complex
+7CRB	A	J	2	RPP1	RPP1 LRR-C-JID / ATR1 (focused)
+7JLU	A	B	2	ROQ1	ROQ1 LRR-C-JID / XopQ (focused)
+7P8K	B	A	2	RRS1	RRS1-WRKY / AvrRps4
+7B1I	B	C	3	Pik	OsHIPP19-HMA (host) / AVR-PikF
+7NLJ	A	B	3	Pik-like	sHMA25 (host) / APikL2A
+7NMM	A,B,C,D,E,F,G,H	I,J,K,L,M,N,O,P	3	Pik-like	sHMA94 (host) / APikL2F
+9RSV	A	B	3	RGA5	OsHPP09-HMA (host) / AVR-Pia
+8R7A	A	B	3	Pwl2	OsHIPP43-HMA (host) / Pwl2
+8R7D	A,C	B,D	3	Pwl2	OsHIPP43-HMA (host) / Pwl2-SNDE
+7PP2	A	B	3	Pii	Exo70F2 (host) / AVR-Pii
+8PQ7	A,C	B,D	3	RxLR	PP1c (host) / Pi04134 (PexRD24)
+8PFC	B,D,F,H,J,L,N,P	A,C,E,G,I,K,M,O	3	SAP	SPL5 (host) / SAP05
+8PFD	B	A	3	SAP	Rpn10-vWA (host) / SAP05
+9RDC	C,D	A,B	3	NRC3	NbTOL9a-ENTH (host) / AVRcap1b
+8BV0	A,C	B,D	4	NRC1	NRC1 / SS15
+9QWW	A,C	B,D	4	NRC2	NRC2a / SS15
+9RIA	A,B,C	G	4	NRC3	NRC3 / AVRcap1b
+7XC2	A,C,E,G,I	B,D,F,H,J	4	Sr35	Sr35 resistosome / AvrSr35 (pentamer)
+7XX2	A,C,E,G,I	B	4	Sr35	Sr35 resistosome / AvrSr35 (variant)
+7CRC	A,B,C,D	E,F,G,H	4	RPP1	RPP1 tetramer / ATR1 (full resistosome)
+9QLV	A,B,C,D	P,Q,R,S	4	WRR4A	WRR4A tetramer / CCG40 (full resistosome)
+9QT4	A,B,C,D	P,Q,R,S	4	WRR4A	WRR4A tetramer / CCG40 (focused refinement; dup of 9QLV)
+9QU9	A,B,C,D	P,Q,R,S	4	WRR4A	WRR4A tetramer / CCG40 (C2 symmetry; dup of 9QLV)
+9R8W	A,B,C,D	P,Q,R,S	4	WRR4A	WRR4A tetramer / CCG28 (weak binder)

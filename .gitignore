@@ -96,6 +96,12 @@ experiments/*/.nextflow*
 experiments/*/*.out
 experiments/*/*.err
 
+# ----- Data: raw downloaded structures -----
+# The full mmCIF archive is bulky and regenerable from
+# data/download_solved_structures.sh, so it is not tracked. The curated
+# two-chain references in data/complexes_for_benchmarking/ ARE tracked.
+data/solved_NLR_structures/
+
 # ----- Archive / scratch -----
 archive/
 scratch/

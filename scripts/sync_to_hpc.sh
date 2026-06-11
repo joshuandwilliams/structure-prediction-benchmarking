@@ -52,6 +52,7 @@ rsync -av --delete $DRY_RUN -e ssh \
     --exclude='nxf_home/' \
     --exclude='*.img' \
     --exclude='*.sif' \
+    --exclude='data/solved_NLR_structures/' \
     --exclude='work/' \
     --exclude='.nextflow*' \
     --exclude='*_results/' \
