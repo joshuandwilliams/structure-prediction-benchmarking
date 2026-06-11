@@ -138,7 +138,7 @@ for f in sorted(output_dir.rglob("*")):
 CHAI_SCRIPT
 
     # ─── Aggregate multi-seed outputs ─────────────────────────────────────
-    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz pt json
+    bash ${projectDir}/bin/aggregate_seed_outputs.sh cif pdb npz pt json
 
     echo "Aggregated PDB files:"
     find all_outputs -name "*.pdb" | sort | head -20 || true
