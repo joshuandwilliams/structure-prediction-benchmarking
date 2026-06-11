@@ -60,6 +60,7 @@ models:
 # af2_data_dir:        "/nbi/Reference-Data/AlphaFold/db-v2.3.2"
 # af3_db_v3:           "/nbi/Reference-Data/AlphaFold/db-v3.0.0"
 # af3_model_dir:       "/hpc-home/jowillia/singularity/AlphaFold3"
+# af3_db_dir:          "/hpc-home/jowillia/singularity/AlphaFold3/af3_db"
 # af2_package_id:      "be036146-04b2-42a1-b7f8-26af883f2281"
 # af3_package_id:      "e8edb411-7374-4342-b9f1-408da41fc197"
 

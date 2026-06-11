@@ -5,7 +5,7 @@
  * Three processes:
  *
  *   AF3_SETUP_DB  — idempotently build the combined AF3 database directory
- *                   at $HOME/af3_db via symlinks to the shared reference
+ *                   at params.af3_db_dir via symlinks to the shared reference
  *                   data location.  Runs exactly once; AF3 and AF3_NOMSA
  *                   both consume its output channel.
  *
@@ -19,7 +19,7 @@
  * Default is 5 diffusion samples per seed and 10 recycles, giving
  * 5 × 5 = 25 output structures.
  *
- * The AF3 data directory lives at $HOME/af3_db because AF3's run_alphafold.py
+ * The AF3 data directory lives at params.af3_db_dir because AF3's run_alphafold.py
  * requires all databases to sit in a single --db_dir.  The shared
  * reference-data location cannot itself serve as --db_dir because the
  * BFD/MGnify files from db-v2.3.2 need to appear alongside the v3.0.0 files,
@@ -34,7 +34,7 @@
 /*
  * AF3_SETUP_DB
  * ------------
- * Create/refresh the $HOME/af3_db symlink farm exactly once.  Emits a
+ * Create/refresh the params.af3_db_dir symlink farm exactly once.  Emits a
  * value channel containing the dir path, which AF3 and AF3_NOMSA both
  * consume.  Using `-resume` will skip this process cleanly because the
  * output channel content (a single path string) is deterministic.
@@ -45,25 +45,42 @@ process AF3_SETUP_DB {
 
     output:
     path "af3_db_ready.flag", emit: ready_flag
-    val  "${System.getenv('HOME')}/af3_db", emit: db_dir
+    val  "${params.af3_db_dir}", emit: db_dir
 
     script:
     """
     set -euo pipefail
 
-    AF3_DATA_DIR="\${HOME}/af3_db"
-    mkdir -p "\${AF3_DATA_DIR}"
+    AF3_DATA_DIR="${params.af3_db_dir}"
 
-    # ─── Link v3.0.0 databases ────────────────────────────────────────────
-    for f in ${params.af3_db_v3}/*; do
-        ln -sfn "\$f" "\${AF3_DATA_DIR}/\$(basename "\$f")"
+    # ─── Use the existing symlink farm if it's already populated ─────────
+    # The farm is maintained at params.af3_db_dir.  If the critical BFD link
+    # is already there we trust it; otherwise (re)build the farm from the
+    # shared reference data.  ln -sfn is idempotent and never deletes links
+    # the user added by hand, so this is safe to run against a curated farm.
+    if [ -e "\${AF3_DATA_DIR}/bfd-first_non_consensus_sequences.fasta" ]; then
+        echo "Using existing AF3 database farm at \${AF3_DATA_DIR}"
+    else
+        echo "Building AF3 database farm at \${AF3_DATA_DIR}..."
+        mkdir -p "\${AF3_DATA_DIR}"
+        for f in ${params.af3_db_v3}/*; do
+            ln -sfn "\$f" "\${AF3_DATA_DIR}/\$(basename "\$f")"
+        done
+        ln -sfn ${params.af2_data_dir}/small_bfd/bfd-first_non_consensus_sequences.fasta \\
+            "\${AF3_DATA_DIR}/bfd-first_non_consensus_sequences.fasta"
+        ln -sfn ${params.af2_data_dir}/mgnify/mgy_clusters_2022_05.fa \\
+            "\${AF3_DATA_DIR}/mgy_clusters_2022_05.fa"
+    fi
+
+    # ─── Verify the critical databases resolve (fail early and clearly) ──
+    # Catches a dangling symlink here instead of deep inside run_alphafold.py.
+    for req in bfd-first_non_consensus_sequences.fasta mgy_clusters_2022_05.fa mmcif_files; do
+        if [ ! -e "\${AF3_DATA_DIR}/\${req}" ]; then
+            echo "ERROR: \${AF3_DATA_DIR}/\${req} is missing or a dangling symlink." >&2
+            echo "       Check params.af3_db_dir and the shared reference-data paths." >&2
+            exit 1
+        fi
     done
-
-    # ─── Link BFD/MGnify from v2.3.2 (AF3 still needs these) ─────────────
-    ln -sfn ${params.af2_data_dir}/small_bfd/bfd-first_non_consensus_sequences.fasta \\
-        "\${AF3_DATA_DIR}/bfd-first_non_consensus_sequences.fasta"
-    ln -sfn ${params.af2_data_dir}/mgnify/mgy_clusters_2022_05.fa \\
-        "\${AF3_DATA_DIR}/mgy_clusters_2022_05.fa"
 
     echo "AF3 database dir ready: \${AF3_DATA_DIR}"
     ls -la "\${AF3_DATA_DIR}" | head -20

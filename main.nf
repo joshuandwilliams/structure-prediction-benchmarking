@@ -81,6 +81,11 @@ params.af3_db_v3        = "/nbi/Reference-Data/AlphaFold/db-v3.0.0"
 // AF3 model weights directory
 params.af3_model_dir    = "/hpc-home/jowillia/singularity/AlphaFold3"
 
+// AF3 database directory: a single --db_dir containing symlinks to all the
+// reference databases AF3 needs (v3.0.0 dbs + BFD/MGnify from v2.3.2).
+// AF3_SETUP_DB uses this farm if it's already populated, else builds it.
+params.af3_db_dir       = "/hpc-home/jowillia/singularity/AlphaFold3/af3_db"
+
 // HPC source package UUIDs
 params.af2_package_id   = "be036146-04b2-42a1-b7f8-26af883f2281"
 params.af3_package_id   = "e8edb411-7374-4342-b9f1-408da41fc197"
