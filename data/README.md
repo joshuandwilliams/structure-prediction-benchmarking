@@ -11,11 +11,22 @@ data/
                                 (tracked — the source of truth).
   download_solved_structures.sh Pull every PDB in all_nlr_pdbs.txt as mmCIF.
   extract_benchmark_complexes.py Build the 2-chain A/B references from the manifest.
+  strip_heteroatoms.py          Remove HETATM/ANISOU/CONECT (waters/additives/
+                                ions/cofactors) — called automatically by the
+                                extractor; also runnable standalone.
 
   solved_NLR_structures/        Downloaded mmCIF files (gitignored — bulky,
                                 regenerable from the script).
-  complexes_for_benchmarking/   The 43 two-chain A/B reference PDBs (tracked).
+  complexes_for_benchmarking/   The 43 two-chain A/B reference PDBs (tracked,
+                                protein-only — heteroatoms stripped).
 ```
+
+The references are **protein-only**: `extract_benchmark_complexes.py` calls
+`strip_heteroatoms.py` to drop heteroatoms (HOH/SO4/EDO/ADP/ATP/ZN/… — no
+modified residues are present, so no polymer is lost). This keeps the exact same
+reference files in `structure-negative-steering`, whose engine otherwise fails on
+heteroatoms in the effector chain. To re-clean existing files without a full
+re-extract: `python data/strip_heteroatoms.py`.
 
 ## Workflow
 

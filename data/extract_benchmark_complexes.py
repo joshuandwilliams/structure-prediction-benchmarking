@@ -35,6 +35,8 @@ import sys
 
 import gemmi
 
+import strip_heteroatoms
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "solved_NLR_structures")
 OUT = os.path.join(HERE, "complexes_for_benchmarking")
@@ -140,6 +142,10 @@ def main():
         new = build_two_chain(st, rec, tgt)
         out_path = os.path.join(OUT, f"{pid}.pdb")
         new.write_pdb(out_path)
+        # Drop heteroatoms (waters/additives/ions/cofactors copied through from
+        # the source chains) so the reference is protein-only — see
+        # strip_heteroatoms.py for the why.
+        strip_heteroatoms.strip_file(out_path)
         print(f"[{pid}] tier{row['tier']:>2} {row['system']:<9} "
               f"{rec}->A {tgt}->B  ({n} contacts)  -> {os.path.basename(out_path)}")
         written += 1
