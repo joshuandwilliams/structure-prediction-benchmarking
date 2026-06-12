@@ -663,6 +663,10 @@ workflow.onComplete {
         'ESMFOLD2',
     ] as Set
 
+    // Models whose standalone wall-clock time must include the shared
+    // COLABFOLD_SEARCH MSA step — they cannot run without it in practice.
+    def MSA_MODELS = ['BOLTZ1_MSA', 'BOLTZ2_MSA', 'COLABFOLD'] as Set
+
     // Parse Nextflow-formatted memory strings like "6.5 GB" / "120 MB"
     // into GB floats.  Returns null on unrecognised / missing values.
     def parse_mem_gb = { String s ->
@@ -721,6 +725,14 @@ workflow.onComplete {
         return [secs, String.format('%02d:%02d:%02d', h, m, sec)]
     }
 
+    // Format seconds into HH:MM:SS without going through parse_duration.
+    def fmt_hms = { long secs ->
+        long h   = secs / 3600
+        long m   = (secs % 3600) / 60
+        long sec = secs % 60
+        String.format('%02d:%02d:%02d', h, m, sec)
+    }
+
     def trace_path = file("${params.outdir}/trace.txt")
     def out_path   = file("${params.outdir}/predictor_runtime_stats.csv")
 
@@ -746,10 +758,24 @@ workflow.onComplete {
             def i_pcpu     = col('%cpu')
             def i_queue    = col('queue')
 
+            // First pass: collect COLABFOLD_SEARCH wall-clock time so we can
+            // add it to MSA-dependent predictor runtimes (standalone_elapsed_s).
+            // If COLABFOLD_SEARCH ran multiple times, take the max.
+            long msa_elapsed_s = 0L
+            lines.drop(1).each { String msa_line ->
+                def msa_fields = msa_line.split('\t', -1) as List
+                if (i_process < 0 || i_process >= msa_fields.size()) return
+                if (msa_fields[i_process] != 'COLABFOLD_SEARCH') return
+                def rt = i_realtime >= 0 && i_realtime < msa_fields.size() ? msa_fields[i_realtime] : ''
+                def (s, _hms) = parse_duration(rt)
+                if (s != null && s > msa_elapsed_s) msa_elapsed_s = s
+            }
+
             def rows_out = []
             rows_out << [
                 'model', 'status', 'exit_code', 'queue',
                 'elapsed_hms', 'elapsed_s',
+                'standalone_elapsed_hms', 'standalone_elapsed_s',
                 'pct_cpu',
                 'rss_gb', 'vmem_gb', 'peak_rss_gb', 'peak_vmem_gb',
             ].join(',')
@@ -776,6 +802,12 @@ workflow.onComplete {
 
                 def fmt = { Double v -> v == null ? '' : String.format('%.2f', v) }
 
+                // Standalone time = GPU time + MSA time (for MSA-dependent models)
+                def standalone_s   = (elapsed_s != null)
+                    ? (elapsed_s + ((proc_name in MSA_MODELS) ? msa_elapsed_s : 0L))
+                    : null
+                def standalone_hms = standalone_s != null ? fmt_hms(standalone_s) : ''
+
                 rows_out << [
                     proc_name.toLowerCase(),
                     status,
@@ -783,6 +815,8 @@ workflow.onComplete {
                     queue,
                     elapsed_hms ?: '',
                     elapsed_s   ?: '',
+                    standalone_hms,
+                    standalone_s != null ? standalone_s.toString() : '',
                     pct_cpu?.replace('%', '') ?: '',
                     fmt(rss_gb),
                     fmt(vmem_gb),
