@@ -1,0 +1,26 @@
+# =============================================================================
+# Benchmark — 6G10  (Tier 1: Pikp1-HMA / AVR-PikD)
+# receptor: chain A  |  effector: chain B  (standardised by extract_benchmark_complexes.py)
+# =============================================================================
+
+project_name: "6G10_benchmark"
+outdir:       "./6G10_benchmark_results"
+
+reference_pdb:   "./6G10.pdb"
+receptor_chain:  "A"
+effector_chain:  "B"
+
+models:
+  - boltz1
+  - boltz1_msa
+  - boltz1_constrained
+  - boltz2
+  - boltz2_msa
+  - boltz2_constrained
+  - chai1
+  - af2m
+  - af3
+  - af3_nomsa
+  - colabfold
+  - colabfold_nomsa
+  - esmfold2

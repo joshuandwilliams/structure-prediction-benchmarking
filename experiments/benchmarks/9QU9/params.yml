@@ -1,0 +1,26 @@
+# =============================================================================
+# Benchmark — 9QU9  (Tier 4: WRR4A tetramer / CCG40 (C2 symmetry; dup of 9QLV))
+# receptor: chain A  |  effector: chain B  (standardised by extract_benchmark_complexes.py)
+# =============================================================================
+
+project_name: "9QU9_benchmark"
+outdir:       "./9QU9_benchmark_results"
+
+reference_pdb:   "./9QU9.pdb"
+receptor_chain:  "A"
+effector_chain:  "B"
+
+models:
+  - boltz1
+  - boltz1_msa
+  - boltz1_constrained
+  - boltz2
+  - boltz2_msa
+  - boltz2_constrained
+  - chai1
+  - af2m
+  - af3
+  - af3_nomsa
+  - colabfold
+  - colabfold_nomsa
+  - esmfold2

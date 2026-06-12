@@ -1,0 +1,26 @@
+# =============================================================================
+# Benchmark — 9IP6  (Tier 1: RGA5-HMA8 / AVR1-CO39)
+# receptor: chain A  |  effector: chain B  (standardised by extract_benchmark_complexes.py)
+# =============================================================================
+
+project_name: "9IP6_benchmark"
+outdir:       "./9IP6_benchmark_results"
+
+reference_pdb:   "./9IP6.pdb"
+receptor_chain:  "A"
+effector_chain:  "B"
+
+models:
+  - boltz1
+  - boltz1_msa
+  - boltz1_constrained
+  - boltz2
+  - boltz2_msa
+  - boltz2_constrained
+  - chai1
+  - af2m
+  - af3
+  - af3_nomsa
+  - colabfold
+  - colabfold_nomsa
+  - esmfold2

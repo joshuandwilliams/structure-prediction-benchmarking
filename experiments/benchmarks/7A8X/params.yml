@@ -1,0 +1,26 @@
+# =============================================================================
+# Benchmark — 7A8X  (Tier 1: Pikh1-HMA / AVR-PikC)
+# receptor: chain A  |  effector: chain B  (standardised by extract_benchmark_complexes.py)
+# =============================================================================
+
+project_name: "7A8X_benchmark"
+outdir:       "./7A8X_benchmark_results"
+
+reference_pdb:   "./7A8X.pdb"
+receptor_chain:  "A"
+effector_chain:  "B"
+
+models:
+  - boltz1
+  - boltz1_msa
+  - boltz1_constrained
+  - boltz2
+  - boltz2_msa
+  - boltz2_constrained
+  - chai1
+  - af2m
+  - af3
+  - af3_nomsa
+  - colabfold
+  - colabfold_nomsa
+  - esmfold2
