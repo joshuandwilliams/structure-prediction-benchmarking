@@ -193,7 +193,7 @@ if (params.models == null) {
 def needs_shared_msa      = SELECTED_MODELS.any { it in ['boltz1_msa', 'boltz2_msa', 'colabfold'] }
 def needs_af3_db          = SELECTED_MODELS.any { it in ['af3', 'af3_nomsa'] }
 def needs_eff_template    = INPUT_MODE == 'pdb' &&
-                            SELECTED_MODELS.any { it in ['af3', 'af3_nomsa', 'colabfold', 'colabfold_nomsa',
+                            SELECTED_MODELS.any { it in ['af3_nomsa', 'colabfold', 'colabfold_nomsa',
                                                           'boltz2', 'boltz2_msa'] }
 
 log.info """
@@ -558,8 +558,7 @@ workflow {
     if ('af3' in SELECTED_MODELS) {
         AF3(
             receptor_seq_ch, effector_seq_ch,
-            af3_db_dir_ch, af3_db_flag_ch,
-            effector_template_cif_ch
+            af3_db_dir_ch, af3_db_flag_ch
         )
         METRICS_AF3(
             build_metric_input('af3', MODEL_TO_PARSER['af3'],

@@ -3,11 +3,10 @@
 Generate AlphaFold 3 JSON input.
 
 Two modes:
-  full   — let AF3 run its full data pipeline (MSA + PDB template search).
-            An effector structural template is injected into the JSON for the
-            effector chain (chain B), which causes AF3 to use it instead of
-            searching the PDB for effector templates.  The receptor (chain A)
-            still gets the full MSA + template treatment.
+  full   — let AF3 run its full data pipeline (MSA + PDB template search) for
+            BOTH chains — vanilla AF3.  No custom effector template is injected:
+            AF3 rejects a chain that combines an auto-built MSA with a custom
+            template, so template steering is applied only in nomsa mode.
   nomsa  — --norun_data_pipeline mode: MSA fields are empty and no PDB
             template search is run.  An effector template is still injected
             if provided.
@@ -56,8 +55,9 @@ def main():
     template_entries = load_template(args.template, n_eff)
 
     if args.mode == "full":
-        # Full data pipeline: MSA + PDB template search for receptor.
-        # Effector gets the injected template (overrides PDB search for that chain).
+        # Full data pipeline (MSA + PDB template search) for BOTH chains.
+        # No custom template injection: AF3 rejects a chain that has a custom
+        # template alongside an auto-built MSA, so full mode is vanilla AF3.
         receptor_protein = {
             "id": "A",
             "sequence": args.receptor_seq,
@@ -66,8 +66,7 @@ def main():
             "id": "B",
             "sequence": args.effector_seq,
         }
-        if template_entries:
-            effector_protein["templates"] = template_entries
+        template_entries = []  # full mode never uses a custom template
 
     else:  # nomsa
         # No data pipeline: empty MSA, no PDB template search.

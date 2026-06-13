@@ -94,14 +94,13 @@ process AF3_SETUP_DB {
 /*
  * AF3
  * ---
- * AlphaFold 3 with full data pipeline (MSA + template search).
- * The effector structural template is injected into the JSON so AF3 uses
- * it for the effector chain instead of searching PDB — comparable to the
- * negative-steering workflow which also provides the effector structure.
- * The receptor chain still gets full MSA + template treatment.
- * In FASTA mode, effector_template_cif is an empty sentinel (no injection).
+ * AlphaFold 3 with the full data pipeline (MSA + PDB template search) for both
+ * chains — vanilla AF3.  No custom effector template is injected here: AF3
+ * rejects a chain that combines an auto-built MSA with a custom template
+ * (ValueError: "...set only partially"), so effector-template steering is
+ * applied only in AF3_NOMSA (and ColabFold), not in this with-MSA condition.
  *
- * Note: AF2M cannot inject custom templates via its CLI; its templates
+ * Note: AF2M cannot inject custom templates via its CLI either; its templates
  * are limited to structures deposited before 2020-05-14.
  */
 process AF3 {
@@ -116,7 +115,6 @@ process AF3 {
     val  effector_seq
     val  af3_db_dir
     path db_ready_flag
-    path effector_template_cif
 
     output:
     path "output",      emit: prediction_dir
@@ -132,11 +130,10 @@ process AF3 {
 
     mkdir -p output
 
-    # ─── Generate AF3 JSON (with effector template if available) ─────────
+    # ─── Generate AF3 JSON (vanilla AF3: full pipeline, no template) ──────
     singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
         python ${projectDir}/bin/af3_input.py \\
             "${receptor_seq}" "${effector_seq}" full \\
-            --template ${effector_template_cif} \\
             --output input.json
 
     # ─── Load AF3 environment and run ────────────────────────────────────
