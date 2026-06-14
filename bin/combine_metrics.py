@@ -3,16 +3,21 @@
 Combine per-benchmark all_metrics.csv files into one summary CSV.
 
 For every (model, msa, pdb) combination it keeps the single prediction with the
-LOWEST ra_eff (receptor-aligned effector RMSD) — i.e. the best effector pose.
+LOWEST ra_eff (rmsd_effector_receptor_aligned, the receptor-aligned effector
+RMSD) — i.e. the best effector pose — and carries through ALL of that
+prediction's metric columns so you can select whichever you want later.
 
 Output columns:
-    model, msa, pdb, plddt, ra_eff, rec_rmsd, eff_rmsd
+    model, msa, pdb, predictor, <every column from all_metrics.csv>
 
-Source columns (from <PDB>_benchmark_results/all_metrics.csv):
-    plddt    <- avg_plddt
-    ra_eff   <- rmsd_effector_receptor_aligned
-    rec_rmsd <- rmsd_receptor
-    eff_rmsd <- rmsd_effector_independent
+  - model / msa / pdb are derived (see below).
+  - predictor is the original all_metrics.csv "model" column (the predictor
+    directory name, e.g. boltz1_msa), kept for traceability.
+  - all remaining all_metrics.csv columns (avg_plddt, ptm, iptm, the rmsd_*
+    family incl. the _core variants, ipsae_*, etc.) are passed through verbatim
+    from the chosen (lowest-ra_eff) prediction.
+
+ra_eff used for selection = rmsd_effector_receptor_aligned.
 
 The "model" column in all_metrics.csv is the predictor directory name; we split
 it into a base model + an msa flag ("msa" / "no_msa"):
@@ -50,13 +55,8 @@ MODEL_MAP = {
     "esmfold2":           ("esmfold2",           "no_msa"),
 }
 
-SRC = {  # output field -> source column
-    "plddt":    "avg_plddt",
-    "ra_eff":   "rmsd_effector_receptor_aligned",
-    "rec_rmsd": "rmsd_receptor",
-    "eff_rmsd": "rmsd_effector_independent",
-}
-OUT_COLS = ["model", "msa", "pdb", "plddt", "ra_eff", "rec_rmsd", "eff_rmsd"]
+RA_EFF_COL = "rmsd_effector_receptor_aligned"   # selection key: lowest is best
+DERIVED = ["model", "msa", "pdb", "predictor"]  # prepended; "predictor" = orig "model"
 
 
 def to_float(v):
@@ -99,10 +99,11 @@ def main():
     if not os.path.isdir(bench_dir):
         sys.exit(f"ERROR: benchmarks dir not found: {bench_dir}")
 
-    # best[(model, msa, pdb)] = (ra_eff_value, row_dict)
+    # best[(model, msa, pdb)] = (ra_eff_value, full_source_row_dict)
     best = {}
     n_files = 0
     n_rows = 0
+    src_fieldnames = None       # column order from the first all_metrics.csv read
     unknown_models = set()
     no_score = set()           # combos seen but with no valid ra_eff anywhere
     missing = []               # benchmark dirs without an all_metrics.csv
@@ -119,6 +120,8 @@ def main():
 
         with open(csv_path, newline="") as fh:
             reader = csv.DictReader(fh)
+            if src_fieldnames is None and reader.fieldnames:
+                src_fieldnames = list(reader.fieldnames)
             for row in reader:
                 n_rows += 1
                 raw_model = (row.get("model") or "").strip()
@@ -129,24 +132,34 @@ def main():
                 model, msa = map_model(raw_model)
                 key = (model, msa, pdb)
 
-                ra = to_float(row.get(SRC["ra_eff"]))
+                ra = to_float(row.get(RA_EFF_COL))
                 if ra is None:
                     no_score.add(key)
                     continue
                 if key not in best or ra < best[key][0]:
-                    best[key] = (ra, {
-                        "model":    model,
-                        "msa":      msa,
-                        "pdb":      pdb,
-                        "plddt":    (row.get(SRC["plddt"])    or "").strip(),
-                        "ra_eff":   (row.get(SRC["ra_eff"])   or "").strip(),
-                        "rec_rmsd": (row.get(SRC["rec_rmsd"]) or "").strip(),
-                        "eff_rmsd": (row.get(SRC["eff_rmsd"]) or "").strip(),
-                    })
+                    best[key] = (ra, dict(row))   # keep the whole prediction
 
-    rows = [best[k][1] for k in sorted(best)]
+    if src_fieldnames is None:
+        src_fieldnames = []
+
+    # Output header: derived cols + every source col, with the original "model"
+    # column renamed to "predictor" (our derived "model" is the base name).
+    out_fieldnames = list(DERIVED) + ["predictor" if c == "model" else c
+                                      for c in src_fieldnames if c != "model"]
+
+    rows = []
+    for (model, msa, pdb) in sorted(best):
+        src_row = best[(model, msa, pdb)][1]
+        out_row = {"model": model, "msa": msa, "pdb": pdb,
+                   "predictor": (src_row.get("model") or "").strip()}
+        for c in src_fieldnames:
+            if c == "model":
+                continue
+            out_row[c] = src_row.get(c, "")
+        rows.append(out_row)
+
     with open(args.output, "w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=OUT_COLS)
+        writer = csv.DictWriter(fh, fieldnames=out_fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
