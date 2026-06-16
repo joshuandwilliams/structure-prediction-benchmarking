@@ -31,6 +31,33 @@ RA_CANDIDATES = ["ra_eff", "rmsd_effector_receptor_aligned"]
 NO_MSA_COLOR = "#4C72B0"   # blue
 MSA_COLOR    = "#C44E52"   # red
 
+# Full display names (no abbreviations) for the predictor `model` values.
+FULL_NAMES = {
+    "af2m":               "AlphaFold2-Multimer",
+    "af3":                "AlphaFold3",
+    "boltz1":             "Boltz-1",
+    "boltz1_constrained": "Boltz-1 (constrained)",
+    "boltz2":             "Boltz-2",
+    "boltz2_constrained": "Boltz-2 (constrained)",
+    "chai1":              "Chai-1",
+    "colabfold":          "ColabFold",
+    "esmfold2":           "ESMFold2",
+}
+
+# Colour by model family: AlphaFold/ColabFold = blues, Boltz = greens,
+# Chai = yellow, ESMFold = red (distinct shade per model within a family).
+FAMILY_COLORS = {
+    "af3":                "#08519c",   # AlphaFold — dark blue
+    "af2m":               "#4292c6",   # AlphaFold — medium blue
+    "colabfold":          "#9ecae1",   # AlphaFold lineage — light blue
+    "boltz1":             "#74c476",   # Boltz — green
+    "boltz1_constrained": "#bae4b3",   # Boltz — light green
+    "boltz2":             "#238b45",   # Boltz — dark green
+    "boltz2_constrained": "#00441b",   # Boltz — darkest green
+    "chai1":              "#fec44f",   # Chai — yellow
+    "esmfold2":           "#e34a33",   # ESMFold — red
+}
+
 
 def pretty(model):
     return model.replace("_constrained", "\n(constr)")
@@ -112,30 +139,55 @@ def main():
     fig.savefig(box_path, dpi=150); plt.close(fig)
 
     # ── (b) success-rate bar ──────────────────────────────────────────────
-    counts = [int((series[c] < args.threshold).sum()) for c in combos]
-    ns     = [len(series[c]) for c in combos]
-    fig, ax = plt.subplots(figsize=(max(10, 0.7 * len(combos) + 3), 6))
-    ax.bar(xs, counts, width=0.6, color=colors, alpha=0.85)
-    for x, k, n in zip(xs, counts, ns):
+    # Bars: alphabetical (by full name) within each MSA group, tight spacing with
+    # a thin black border, coloured by model family, full-name x labels, and a
+    # "No MSA" / "MSA" header cell band above each group (like table headers).
+    b_no  = sorted((m for f, m in combos if f == "no_msa"),
+                   key=lambda m: FULL_NAMES.get(m, m))
+    b_msa = sorted((m for f, m in combos if f == "msa"),
+                   key=lambda m: FULL_NAMES.get(m, m))
+    b_combos = [("no_msa", m) for m in b_no] + [("msa", m) for m in b_msa]
+    b_nno = len(b_no)
+    GROUP_GAP = 1.0
+    b_xs = list(range(b_nno)) + [b_nno + GROUP_GAP + i for i in range(len(b_msa))]
+    b_counts = [int((series[c] < args.threshold).sum()) for c in b_combos]
+    b_ns     = [len(series[c]) for c in b_combos]
+    b_colors = [FAMILY_COLORS.get(m, "#999999") for _, m in b_combos]
+    b_labels = [FULL_NAMES.get(m, m) for _, m in b_combos]
+
+    fig, ax = plt.subplots(figsize=(max(10, 0.6 * len(b_combos) + 3), 6))
+    ax.bar(b_xs, b_counts, width=0.92, color=b_colors,
+           edgecolor="black", linewidth=0.8)
+    for x, k, n in zip(b_xs, b_counts, b_ns):
         ax.text(x, k + 0.15, f"{k}/{n}", ha="center", va="bottom", fontsize=8)
-    ax.axvline(gap_x, color="lightgrey", lw=1)
-    ax.set_xticks(xs); ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
-    ax.set_ylabel(f"# PDBs with ra_eff < {args.threshold:g} Å")
-    ax.set_ylim(0, max(ns) + 1)
-    ax.set_title(f"Successful-pose rate (ra_eff < {args.threshold:g} Å) per model / MSA / constraint")
-    ax.text(np.mean(xs[:n_no]), max(ns) + 0.6, "No MSA", ha="center",
-            fontsize=11, fontweight="bold", color=NO_MSA_COLOR)
-    ax.text(np.mean(xs[n_no:]), max(ns) + 0.6, "MSA", ha="center",
-            fontsize=11, fontweight="bold", color=MSA_COLOR)
+
+    # Header cells above the bars.
+    band_lo = max(b_counts) + 0.9
+    band_hi = band_lo + 1.1
+    for name, gxs in [("No MSA", b_xs[:b_nno]), ("MSA", b_xs[b_nno:])]:
+        x0, x1 = min(gxs) - 0.46, max(gxs) + 0.46
+        ax.add_patch(plt.Rectangle((x0, band_lo), x1 - x0, band_hi - band_lo,
+                                   facecolor="#e0e0e0", edgecolor="black",
+                                   linewidth=0.8))
+        ax.text((x0 + x1) / 2, (band_lo + band_hi) / 2, name, ha="center",
+                va="center", fontsize=11, fontweight="bold", color="black")
+
+    ax.set_xticks(b_xs)
+    ax.set_xticklabels(b_labels, rotation=45, ha="right", fontsize=9)
+    ax.set_ylabel(f"Number of targets with ra_eff < {args.threshold:g} Å")
+    ax.set_ylim(0, band_hi + 0.4)
+    ax.set_xlim(-0.7, b_xs[-1] + 0.7)
     fig.tight_layout()
     bar_path = os.path.join(outdir, "success_rate_barplot.png")
-    fig.savefig(bar_path, dpi=150); plt.close(fig)
+    fig.savefig(bar_path, dpi=150, bbox_inches="tight"); plt.close(fig)
 
     # ── text summary ──────────────────────────────────────────────────────
     print(f"ra_eff column: {ra_col} | threshold: {args.threshold} Å")
     print(f"{'combo':<28} {'n':>3} {'median':>7} {'success':>8}")
-    for c, k, n in zip(combos, counts, ns):
+    for c in combos:
         f, m = c
+        n = len(series[c])
+        k = int((series[c] < args.threshold).sum())
         print(f"{m+' ['+f+']':<28} {n:>3} {np.median(series[c]):>7.2f} {k:>3}/{n}")
     print(f"\nWrote:\n  {box_path}\n  {bar_path}")
 

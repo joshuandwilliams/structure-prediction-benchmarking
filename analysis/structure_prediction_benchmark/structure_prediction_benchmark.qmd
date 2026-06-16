@@ -1,0 +1,309 @@
+---
+title: "Structure-prediction benchmark analysis"
+format:
+  html:
+    code-fold: true
+jupyter: python3
+---
+
+Date: 16/6/26
+
+This document summarises the structure-prediction benchmark: a panel of folding
+methods run on known receptor–effector complexes, scored by `ra_eff` =
+receptor-aligned effector RMSD (Å) against the experimental structure.
+**Lower is better**, and `ra_eff` < 5 Å counts as a correctly posed effector.
+
+For every `(model, MSA setting, target)` the pipeline keeps the single best pose
+(lowest `ra_eff`); `combine_metrics.py` collapses these into one row per
+`(model, msa, pdb)`. This document reads the committed `combined_metrics.csv`
+(20 completed targets at time of writing) plus `pdb_release_dates.csv`, so it
+renders without HPC access.
+
+Models assessed: AF2-Multimer, AF3 (± MSA), Boltz-1 / Boltz-2 (± MSA, ±
+constraints), Chai-1, ColabFold (± MSA) and ESMFold2 (Biohub, ESMC-6B). MSA and
+no-MSA are split into two groups because the MSA setting dominates accuracy.
+
+---
+
+## 1. Setup
+
+### 1.1 Import required libraries
+
+```{python}
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+```
+
+### 1.2 Load data
+
+```{python}
+HERE = Path.cwd()
+csv_path = HERE / "combined_metrics.csv"
+if not csv_path.exists():
+    csv_path = Path("analysis/structure_prediction_benchmark/combined_metrics.csv")
+dates_path = csv_path.parent / "pdb_release_dates.csv"
+
+df = pd.read_csv(csv_path)
+RA_COL = "rmsd_effector_receptor_aligned"   # ra_eff: receptor-aligned effector RMSD
+df = df[df["msa"].isin(["msa", "no_msa"])].copy()
+df[RA_COL] = pd.to_numeric(df[RA_COL], errors="coerce")
+df = df.dropna(subset=[RA_COL])
+df.head()
+```
+
+### 1.3 Constants
+
+```{python}
+RA_EFF_THRESHOLD = 5.0      # Angstrom; correct-pose cutoff
+NO_MSA_COLOR = "#4C72B0"    # blue
+MSA_COLOR    = "#C44E52"    # red
+N_PDB = df["pdb"].nunique()
+
+FIGDIR = csv_path.parent / "figures"
+FIGDIR.mkdir(parents=True, exist_ok=True)
+
+
+def save_fig(fig, name):
+    """Save as both PNG and SVG with whitespace cropped tight (for Inkscape)."""
+    for ext in ("png", "svg"):
+        fig.savefig(FIGDIR / f"{name}.{ext}", dpi=200,
+                    bbox_inches="tight", pad_inches=0.05)
+
+
+def pretty(model):
+    return model.replace("_constrained", "\n(constr)")
+
+
+# Order combos: No-MSA block then MSA block, each sorted by median ra_eff. Build
+# the per-combo ra_eff arrays once; both plots below reuse them.
+def ordered(msa_flag):
+    s = df[df["msa"] == msa_flag]
+    return list(s.groupby("model")[RA_COL].median().sort_values().index)
+
+
+combos = [("no_msa", m) for m in ordered("no_msa")] + \
+         [("msa", m) for m in ordered("msa")]
+n_no = sum(1 for f, _ in combos if f == "no_msa")
+series = {(f, m): df[(df["msa"] == f) & (df["model"] == m)][RA_COL].values
+          for (f, m) in combos}
+labels = [pretty(m) for (_, m) in combos]
+colors = [NO_MSA_COLOR] * n_no + [MSA_COLOR] * (len(combos) - n_no)
+# x positions with a gap between the two groups.
+xs = list(range(n_no)) + [i + 1 for i in range(n_no, len(combos))]
+gap_x = n_no + 0.0
+print(f"{len(combos)} model/MSA combos across {N_PDB} targets")
+```
+
+---
+
+## 2. Effector pose accuracy (`ra_eff`)
+
+```{python}
+fig, ax = plt.subplots(figsize=(max(10, 0.7 * len(combos) + 3), 6))
+data = [series[c] for c in combos]
+bp = ax.boxplot(data, positions=xs, widths=0.6, patch_artist=True,
+                showfliers=False, medianprops=dict(color="black"))
+for patch, col in zip(bp["boxes"], colors):
+    patch.set_facecolor(col)
+    patch.set_alpha(0.55)
+rng = np.random.default_rng(0)
+for x, c in zip(xs, combos):
+    y = series[c]
+    ax.scatter(x + rng.uniform(-0.15, 0.15, len(y)), y, s=14,
+               color="black", alpha=0.45, zorder=3)
+ax.axhline(RA_EFF_THRESHOLD, ls="--", color="grey", lw=1)
+ax.text(xs[-1], RA_EFF_THRESHOLD, f"  ra_eff = {RA_EFF_THRESHOLD:g} Å",
+        va="bottom", ha="right", color="grey", fontsize=9)
+ax.axvline(gap_x, color="lightgrey", lw=1)
+ax.set_xticks(xs)
+ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+ax.set_ylabel("ra_eff  (receptor-aligned effector RMSD, Å)")
+ax.set_title("Effector pose accuracy (ra_eff) per model / MSA / constraint")
+ax.text(np.mean(xs[:n_no]), ax.get_ylim()[1], "No MSA", ha="center", va="top",
+        fontsize=11, fontweight="bold", color=NO_MSA_COLOR)
+ax.text(np.mean(xs[n_no:]), ax.get_ylim()[1], "MSA", ha="center", va="top",
+        fontsize=11, fontweight="bold", color=MSA_COLOR)
+save_fig(fig, "ra_eff_boxplot")
+plt.show()
+```
+
+**What this shows:**
+
+- One box per model/MSA/constraint combo (No-MSA group left, MSA group right, each
+  sorted by median `ra_eff`), with every target overlaid as a jittered point and
+  the dashed line at the 5 Å correct-pose cutoff.
+- The MSA group sits markedly lower than the No-MSA group: providing an MSA is the
+  single biggest driver of effector-pose accuracy here.
+- Within No-MSA, AF3 and ESMFold2 have the tightest, lowest distributions, while
+  ColabFold without an MSA is the weakest.
+
+---
+
+## 3. Successful-pose rate
+
+```{python}
+# Full display names (no abbreviations) and family colours: AlphaFold/ColabFold
+# = blues, Boltz = greens, Chai = yellow, ESMFold = red.
+FULL_NAMES = {
+    "af2m": "AlphaFold2-Multimer", "af3": "AlphaFold3",
+    "boltz1": "Boltz-1", "boltz1_constrained": "Boltz-1 (constrained)",
+    "boltz2": "Boltz-2", "boltz2_constrained": "Boltz-2 (constrained)",
+    "chai1": "Chai-1", "colabfold": "ColabFold", "esmfold2": "ESMFold2",
+}
+FAMILY_COLORS = {
+    "af3": "#08519c", "af2m": "#4292c6", "colabfold": "#9ecae1",
+    "boltz1": "#74c476", "boltz1_constrained": "#bae4b3",
+    "boltz2": "#238b45", "boltz2_constrained": "#00441b",
+    "chai1": "#fec44f", "esmfold2": "#e34a33",
+}
+
+# Alphabetical (by full name) within each MSA group.
+b_no  = sorted((m for f, m in combos if f == "no_msa"), key=lambda m: FULL_NAMES[m])
+b_msa = sorted((m for f, m in combos if f == "msa"),    key=lambda m: FULL_NAMES[m])
+b_combos = [("no_msa", m) for m in b_no] + [("msa", m) for m in b_msa]
+b_nno = len(b_no)
+b_xs = list(range(b_nno)) + [b_nno + 1.0 + i for i in range(len(b_msa))]
+b_counts = [int((series[c] < RA_EFF_THRESHOLD).sum()) for c in b_combos]
+b_ns = [len(series[c]) for c in b_combos]
+b_colors = [FAMILY_COLORS[m] for _, m in b_combos]
+b_labels = [FULL_NAMES[m] for _, m in b_combos]
+
+fig, ax = plt.subplots(figsize=(max(10, 0.6 * len(b_combos) + 3), 6))
+ax.bar(b_xs, b_counts, width=0.92, color=b_colors, edgecolor="black", linewidth=0.8)
+for x, k, nn in zip(b_xs, b_counts, b_ns):
+    ax.text(x, k + 0.15, f"{k}/{nn}", ha="center", va="bottom", fontsize=8)
+
+# "No MSA" / "MSA" header cells above the bars (like two table-header cells).
+band_lo = max(b_counts) + 0.9
+band_hi = band_lo + 1.1
+for name, gxs in [("No MSA", b_xs[:b_nno]), ("MSA", b_xs[b_nno:])]:
+    x0, x1 = min(gxs) - 0.46, max(gxs) + 0.46
+    ax.add_patch(plt.Rectangle((x0, band_lo), x1 - x0, band_hi - band_lo,
+                               facecolor="#e0e0e0", edgecolor="black", linewidth=0.8))
+    ax.text((x0 + x1) / 2, (band_lo + band_hi) / 2, name, ha="center", va="center",
+            fontsize=11, fontweight="bold", color="black")
+
+ax.set_xticks(b_xs)
+ax.set_xticklabels(b_labels, rotation=45, ha="right", fontsize=9)
+ax.set_ylabel(f"Number of targets with ra_eff < {RA_EFF_THRESHOLD:g} Å")
+ax.set_ylim(0, band_hi + 0.4)
+ax.set_xlim(-0.7, b_xs[-1] + 0.7)
+save_fig(fig, "success_rate_barplot")
+plt.show()
+```
+
+**What this shows:**
+
+- The number of targets each combo poses correctly (`ra_eff` < 5 Å), as a count
+  and fraction of the assessed targets, alphabetical within each MSA group and
+  coloured by model family (AlphaFold/ColabFold blue, Boltz green, Chai yellow,
+  ESMFold red).
+- The MSA combos lead; AlphaFold3 with an MSA is the strongest overall.
+- The same model can rank very differently with vs without an MSA — ColabFold is
+  the clearest example.
+
+---
+
+## 4. Training-set membership
+
+How many benchmark structures could each model have *seen during training*? A
+structure counts as in-training when its PDB **initial release date** is on or
+before that model's published training-data cutoff (release date, not deposit
+date — the AF/Boltz/Chai pipelines filter the PDB by release date).
+
+```{python}
+# Published PDB training cutoffs (release-date filter); full model names.
+MODEL_CUTOFFS = {
+    "AlphaFold2-Multimer": "2018-04-30",   # Jumper 2021 / Evans 2021
+    "ColabFold":           "2018-04-30",   # AF2/AF2-Multimer weights
+    "Chai-1":              "2021-01-12",   # Chai-1 technical report (2024)
+    "AlphaFold3":          "2021-09-30",   # Abramson et al. 2024 Nature
+    "Boltz-1":             "2021-09-30",   # Wohlwend et al. 2024 (= AF3)
+    "Boltz-2":             "2023-06-01",   # Boltz-2 report (2025)
+    # Biohub ESMFold2 (ESMC-6B) production "cutoff2025" checkpoint — its recent
+    # held-out PPI eval set starts 2025-06-30 (biohub preprint, 2026). This is
+    # NOT the original 2020 ESM-2 ESMFold.
+    "ESMFold2":            "2025-06-30",
+}
+
+rel = pd.read_csv(dates_path, parse_dates=["release_date"])
+rel = rel[rel["pdb"].isin(df["pdb"].unique())]   # only assessed targets
+N = len(rel)
+
+models = sorted(MODEL_CUTOFFS, key=lambda m: MODEL_CUTOFFS[m])
+in_train = [int((rel["release_date"] <= pd.Timestamp(MODEL_CUTOFFS[m])).sum())
+            for m in models]
+clean = [N - k for k in in_train]
+
+# Colourblind-safe pair (Okabe-Ito): orange = potential leakage, blue = clean.
+x = np.arange(len(models))
+fig, ax = plt.subplots(figsize=(max(9, 1.1 * len(models) + 2), 6))
+ax.bar(x, in_train, color="#D55E00", label="in training set")
+ax.bar(x, clean, bottom=in_train, color="#0072B2", label="after cutoff")
+for xi, k in zip(x, in_train):
+    ax.text(xi, k / 2 if k else 0.3, f"{k}", ha="center", va="center",
+            color="white", fontweight="bold", fontsize=12)
+    ax.text(xi, N + 0.3, f"{k}/{N}", ha="center", va="bottom", fontsize=9)
+ax.set_xticks(x)
+ax.set_xticklabels([f"{m}\n(≤ {MODEL_CUTOFFS[m]})" for m in models], fontsize=9)
+ax.set_ylabel("Number of benchmark structures")
+ax.set_ylim(0, N + 5)
+# Legend inside, above the bars (stacked bars all reach N, leaving room above).
+ax.legend(loc="upper center", ncol=2, frameon=False, fontsize=10)
+save_fig(fig, "training_set_membership")
+plt.show()
+```
+
+**What this shows:**
+
+- For each model, how many assessed benchmark structures were released on/before
+  its training cutoff (orange = potential train-set overlap) vs after it (blue =
+  clean test case), ordered by cutoff date.
+- AF2-Multimer / ColabFold (2018 cutoff) have seen almost none of the benchmark,
+  so their numbers are the closest to a leakage-free test; the newer models have
+  progressively more overlap.
+- **ESMFold2 (2025 cutoff) has the most overlap of all** — as a 2026-era model it
+  may have trained on nearly every benchmark structure, so its accuracy above
+  should be read with that caveat. Only the targets released after a model's
+  cutoff are unambiguously held out for it.
+
+---
+
+## 5. Summary
+
+```{python}
+summary = []
+for f, m in combos:
+    y = series[(f, m)]
+    summary.append({
+        "model": m, "msa": f, "n": len(y),
+        "median_ra_eff": round(float(np.median(y)), 2),
+        "n_correct": int((y < RA_EFF_THRESHOLD).sum()),
+    })
+summary = pd.DataFrame(summary).sort_values("median_ra_eff").reset_index(drop=True)
+summary["pct_correct"] = (100 * summary["n_correct"] / summary["n"]).round(1)
+summary
+```
+
+**What this shows:**
+
+- A ranked table of every combo by median `ra_eff`, with its correct-pose count
+  and percentage — the numeric companion to the plots above.
+
+## 6. Discussion
+
+- The MSA setting is the dominant factor in effector-pose accuracy; AF3 with an
+  MSA is the strongest method on this benchmark, with Boltz-1/Boltz-2 + MSA close
+  behind.
+- Training-set membership is a real confounder: the strongest newer models also
+  have the most potential data overlap, and ESMFold2 (2025 cutoff) could have seen
+  nearly the entire set. The handful of structures released after each cutoff are
+  the only unambiguously clean tests, and a leakage-controlled comparison would
+  restrict to those.
+- This analysis currently covers the completed subset of targets; the figures
+  regenerate unchanged as further benchmarks finish and `combined_metrics.csv` /
+  `pdb_release_dates.csv` are refreshed.
+```
