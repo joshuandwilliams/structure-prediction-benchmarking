@@ -1,5 +1,5 @@
 ---
-title: "Structure-prediction benchmark analysis"
+title: "Structure-prediction benchmark analysis (Tier 1)"
 format:
   html:
     code-fold: true
@@ -13,11 +13,18 @@ methods run on known receptor–effector complexes, scored by `ra_eff` =
 receptor-aligned effector RMSD (Å) against the experimental structure.
 **Lower is better**, and `ra_eff` < 5 Å counts as a correctly posed effector.
 
+**Scope.** This analysis is restricted to **Tier 1**, the small HMA /
+integrated-domain : effector pairs (Pik and RGA5). Tier 1 is the only tier of
+the 43-complex manifest that is fully benchmarked, at 18 of 18 complete, and it
+is the set the thesis reports. Tiers 2 to 4 are excluded here. The two Tier-3
+Pik-like host-target complexes that have also finished (7NLJ, 7NMM) are
+excluded too, so the panel below is a single homogeneous class of complex.
+
 For every `(model, MSA setting, target)` the pipeline keeps the single best pose
-(lowest `ra_eff`); `combine_metrics.py` collapses these into one row per
+(lowest `ra_eff`). `combine_metrics.py` collapses these into one row per
 `(model, msa, pdb)`. This document reads the committed `combined_metrics.csv`
-(20 completed targets at time of writing) plus `pdb_release_dates.csv`, so it
-renders without HPC access.
+and `pdb_release_dates.csv` alongside it, plus the tier assignments in
+`data/benchmark_complexes.tsv`, so it renders without HPC access.
 
 Models assessed: AF2-Multimer, AF3 (± MSA), Boltz-1 / Boltz-2 (± MSA, ±
 constraints), Chai-1, ColabFold (± MSA) and ESMFold2 (Biohub, ESMC-6B). MSA and
@@ -44,13 +51,124 @@ HERE = Path.cwd()
 csv_path = HERE / "combined_metrics.csv"
 if not csv_path.exists():
     csv_path = Path("analysis/structure_prediction_benchmark/combined_metrics.csv")
+csv_path = csv_path.resolve()
 dates_path = csv_path.parent / "pdb_release_dates.csv"
+
+# Tier assignments live in the manifest at the repo root, which is the single
+# source of truth for which complex belongs to which tier.
+REPO_ROOT = csv_path.parent.parent.parent
+manifest_path = REPO_ROOT / "data" / "benchmark_complexes.tsv"
+
+TIER = 1   # Tier 1 = small HMA / integrated-domain : effector pairs (Pik, RGA5)
+
+manifest = pd.read_csv(manifest_path, sep="\t")
+tier_pdbs = set(manifest.loc[manifest["tier"] == TIER, "pdb"])
 
 df = pd.read_csv(csv_path)
 RA_COL = "rmsd_effector_receptor_aligned"   # ra_eff: receptor-aligned effector RMSD
 df = df[df["msa"].isin(["msa", "no_msa"])].copy()
 df[RA_COL] = pd.to_numeric(df[RA_COL], errors="coerce")
 df = df.dropna(subset=[RA_COL])
+
+# Restrict to the tier under analysis, and report what that drops so the
+# excluded targets are never silent.
+assessed = set(df["pdb"])
+dropped = sorted(assessed - tier_pdbs)
+missing = sorted(tier_pdbs - assessed)
+df = df[df["pdb"].isin(tier_pdbs)].copy()
+print(f"Tier {TIER}: {len(tier_pdbs)} complexes in manifest, "
+      f"{df['pdb'].nunique()} with results")
+print(f"  excluded (assessed but not tier {TIER}): {dropped or 'none'}")
+print(f"  missing  (tier {TIER} but no results):   {missing or 'none'}")
+
+# Carry the system label (Pik / RGA5) through for the per-target split below.
+df = df.merge(manifest[["pdb", "system", "description"]], on="pdb", how="left")
+
+# Confidence columns used by the sections below.
+CONF_COLS = ["avg_plddt", "iptm", "ptm", "ipsae_min", "actifptm"]
+for c in CONF_COLS:
+    df[c] = pd.to_numeric(df[c], errors="coerce")
+
+# Boltz reports pLDDT on a 0-1 scale while the AlphaFold-lineage models and
+# Chai-1 report 0-100.  That is how the tools themselves emit it, not a defect,
+# but the two scales cannot be compared directly, so put everything on 0-100
+# here.  Any cross-model use of avg_plddt needs this normalisation.
+_boltz_scale = df.loc[df["avg_plddt"] <= 1.0, "model"].unique()
+if len(_boltz_scale):
+    print(f"  pLDDT rescaled 0-1 -> 0-100 for: {sorted(_boltz_scale)}")
+df["plddt"] = np.where(df["avg_plddt"] <= 1.0,
+                       df["avg_plddt"] * 100.0, df["avg_plddt"])
+
+# Every prediction, not just the best one per combo.  Regenerate with:
+#   python bin/build_per_prediction_csv.py --tier 1 \
+#       --output analysis/structure_prediction_benchmark/per_prediction_metrics.csv
+pred_path = csv_path.parent / "per_prediction_metrics.csv"
+pred = pd.read_csv(pred_path)
+pred = pred[pred["pdb"].isin(tier_pdbs)].copy()
+for c in CONF_COLS + [RA_COL, "rmsd_receptor"]:
+    pred[c] = pd.to_numeric(pred[c], errors="coerce")
+pred = pred.dropna(subset=[RA_COL])
+pred["plddt"] = np.where(pred["avg_plddt"] <= 1.0,
+                         pred["avg_plddt"] * 100.0, pred["avg_plddt"])
+pred["correct"] = pred[RA_COL] < 5.0
+
+# Chai-1 v0.6.x emits only scalar confidence scores in its NPZ, with no PAE
+# matrix (see the note in bin/compute_metrics.py:parse_chai1).  Everything
+# derived from PAE is therefore uncomputable for it, but compute_metrics.py
+# writes 0.0 rather than a blank, so those values look like genuine minimum
+# scores.  Detect any (predictor, metric) that is identically zero and mark it
+# missing, so it is excluded from plots and statistics instead of dragging them
+# down.  This is data-driven rather than a hardcoded Chai-1 rule, so it will
+# also catch any future predictor with the same gap.
+PAE_DERIVED = ["pae_mean", "ipae", "ipsae_ab", "ipsae_ba", "ipsae_min"]
+for _frame in (df, pred):
+    for _c in PAE_DERIVED:
+        if _c not in _frame.columns:
+            continue
+        _frame[_c] = pd.to_numeric(_frame[_c], errors="coerce")
+        for _m in _frame["model"].unique():
+            _mask = _frame["model"] == _m
+            if _mask.any() and (_frame.loc[_mask, _c] == 0).all():
+                _frame.loc[_mask, _c] = np.nan
+_blanked = sorted({m for m in df["model"].unique()
+                   if df.loc[df["model"] == m, "ipsae_min"].isna().all()})
+if _blanked:
+    print(f"  PAE-derived metrics marked missing (not computable) for: {_blanked}")
+
+# Runtime / memory from Nextflow's trace.  Regenerate with:
+#   python bin/build_runtime_csv.py --tier 1 \
+#       --output analysis/structure_prediction_benchmark/runtime_stats.csv
+rt = pd.read_csv(csv_path.parent / "runtime_stats.csv")
+rt = rt[rt["pdb"].isin(tier_pdbs)].copy()
+for c in ["elapsed_s", "peak_rss_gb"]:
+    rt[c] = pd.to_numeric(rt[c], errors="coerce")
+rt = rt.dropna(subset=["elapsed_s", "peak_rss_gb"])
+rt["elapsed_min"] = rt["elapsed_s"] / 60.0
+print(f"  runtime rows: {len(rt)} across {rt['pdb'].nunique()} targets")
+
+# ---------------------------------------------------------------------------
+# boltz2_constrained is EXCLUDED.  Its 450 predicted structures are byte
+# identical to the unconstrained boltz2 run across all 18 targets (verified by
+# md5 on the published best_models PDBs), despite the constrained run being
+# given a genuinely different 266-line input.yaml carrying contact restraints.
+# Boltz-1's constrained variant does differ from its baseline, so this is
+# specific to Boltz-2.  The rows are therefore a duplicate of boltz2 rather
+# than an independent result, and including them would double-count that model
+# and imply the constraints were tested when they were not.  Set
+# DROP_INVALID = False to inspect them.
+# ---------------------------------------------------------------------------
+DROP_INVALID = True
+INVALID_COMBOS = {("boltz2_constrained", "no_msa")}
+if DROP_INVALID:
+    for _m, _f in INVALID_COMBOS:
+        n_before = len(df)
+        df = df[~((df["model"] == _m) & (df["msa"] == _f))]
+        pred = pred[~((pred["model"] == _m) & (pred["msa"] == _f))]
+        rt = rt[~((rt["model"] == _m) & (rt["msa"] == _f))]
+        print(f"  EXCLUDED {_m}/{_f}: structures duplicate {_m.split('_')[0]} "
+              f"({n_before - len(df)} rows dropped)")
+print(f"  per-prediction rows: {len(pred)} across {pred['pdb'].nunique()} targets")
+
 df.head()
 ```
 
@@ -62,26 +180,73 @@ NO_MSA_COLOR = "#4C72B0"    # blue
 MSA_COLOR    = "#C44E52"    # red
 N_PDB = df["pdb"].nunique()
 
-FIGDIR = csv_path.parent / "figures"
-FIGDIR.mkdir(parents=True, exist_ok=True)
+# Figures are split by destination.  The five that go in the thesis chapter
+# live in thesis-figures/ and are named fig1..fig5 in chapter order; everything
+# else is supporting material and lands in supplementary-figures/.
+THESIS_FIGDIR = csv_path.parent / "thesis-figures"
+SUPP_FIGDIR = csv_path.parent / "supplementary-figures"
+for _d in (THESIS_FIGDIR, SUPP_FIGDIR):
+    _d.mkdir(parents=True, exist_ok=True)
 
 
-def save_fig(fig, name):
-    """Save as both PNG and SVG with whitespace cropped tight (for Inkscape)."""
-    for ext in ("png", "svg"):
-        fig.savefig(FIGDIR / f"{name}.{ext}", dpi=200,
-                    bbox_inches="tight", pad_inches=0.05)
+def save_fig(fig, name, thesis=False):
+    """Save as PNG, cropped tight.
+
+    PNG only: the SVGs are only needed in the thesis repo, so keeping them here
+    just duplicated every figure.  thesis=True routes to thesis-figures/,
+    otherwise the figure is treated as supplementary.
+    """
+    out = THESIS_FIGDIR if thesis else SUPP_FIGDIR
+    fig.savefig(out / f"{name}.png", dpi=200,
+                bbox_inches="tight", pad_inches=0.05)
+
+
+# Published capitalisation for every predictor, used on all axes and tables.
+DISPLAY = {
+    "af2m": "AlphaFold2-Multimer", "af3": "AlphaFold3",
+    "boltz1": "Boltz-1", "boltz1_constrained": "Boltz-1 (constr)",
+    "boltz2": "Boltz-2", "boltz2_constrained": "Boltz-2 (constr)",
+    "chai1": "Chai-1", "colabfold": "ColabFold", "esmfold2": "ESMFold2",
+}
+MSA_LABEL = {"msa": "MSA", "no_msa": "No MSA"}
+
+
+def readable_log(axis, ticks):
+    """Plain-number ticks on a log axis.
+
+    Matplotlib's default decade ticks label only the powers of ten, which is
+    unreadable over the ranges here (0.3-40 A, 2-110 min).
+    """
+    axis.set_ticks(ticks)
+    axis.set_ticklabels([f"{v:g}" for v in ticks])
+    axis.set_minor_locator(plt.NullLocator())
+
+
+RA_TICKS = [0.5, 1, 2, 5, 10, 20, 40]     # Angstrom
+TIME_TICKS = [2, 3, 5, 10, 20, 50, 100]   # minutes
 
 
 def pretty(model):
-    return model.replace("_constrained", "\n(constr)")
+    """Display name, wrapped before a parenthesised variant to fit axis ticks."""
+    return DISPLAY.get(model, model).replace(" (", "\n(")
 
 
-# Order combos: No-MSA block then MSA block, each sorted by median ra_eff. Build
-# the per-combo ra_eff arrays once; both plots below reuse them.
+def combo_label(model, msa_flag):
+    return f"{pretty(model)} / {MSA_LABEL[msa_flag]}".replace("\n", " ")
+
+
+# Order combos: No-MSA block then MSA block, each ranked by how many of the 18
+# targets it poses correctly (best first), with median ra_eff breaking ties.
+# Count is the headline number the figure annotates, so ordering on it keeps
+# the bars and the labels telling the same story.
 def ordered(msa_flag):
-    s = df[df["msa"] == msa_flag]
-    return list(s.groupby("model")[RA_COL].median().sort_values().index)
+    g = df[df["msa"] == msa_flag].groupby("model")[RA_COL]
+    stat = pd.DataFrame({
+        "n_ok": g.apply(lambda v: int((v < RA_EFF_THRESHOLD).sum())),
+        "median": g.median(),
+    })
+    return list(stat.sort_values(["n_ok", "median"],
+                                 ascending=[False, True]).index)
 
 
 combos = [("no_msa", m) for m in ordered("no_msa")] + \
@@ -99,10 +264,16 @@ print(f"{len(combos)} model/MSA combos across {N_PDB} targets")
 
 ---
 
-## 2. Effector pose accuracy (`ra_eff`)
+## 2. Effector pose accuracy and correct-pose rate
+
+**Thesis figure 1.** One box per model/MSA/constraint combo, No-MSA group left
+and MSA group right, each sorted by median `ra_eff`, with every target overlaid
+as a jittered point. The count above each box is how many of the 18 targets that
+combo posed correctly. This merges what were two separate figures, since both
+described the same 13 combos.
 
 ```{python}
-fig, ax = plt.subplots(figsize=(max(10, 0.7 * len(combos) + 3), 6))
+fig, ax = plt.subplots(figsize=(max(11, 0.75 * len(combos) + 3), 6.4))
 data = [series[c] for c in combos]
 bp = ax.boxplot(data, positions=xs, widths=0.6, patch_artist=True,
                 showfliers=False, medianprops=dict(color="black"))
@@ -114,108 +285,410 @@ for x, c in zip(xs, combos):
     y = series[c]
     ax.scatter(x + rng.uniform(-0.15, 0.15, len(y)), y, s=14,
                color="black", alpha=0.45, zorder=3)
+
 ax.axhline(RA_EFF_THRESHOLD, ls="--", color="grey", lw=1)
-ax.text(xs[-1], RA_EFF_THRESHOLD, f"  ra_eff = {RA_EFF_THRESHOLD:g} Å",
-        va="bottom", ha="right", color="grey", fontsize=9)
-ax.axvline(gap_x, color="lightgrey", lw=1)
+ax.set_yscale("log")
+readable_log(ax.yaxis, RA_TICKS)
+ax.set_ylabel("Receptor-aligned effector RMSD (Å, log scale)")
 ax.set_xticks(xs)
 ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
-ax.set_ylabel("ra_eff  (receptor-aligned effector RMSD, Å)")
-ax.set_title("Effector pose accuracy (ra_eff) per model / MSA / constraint")
-ax.text(np.mean(xs[:n_no]), ax.get_ylim()[1], "No MSA", ha="center", va="top",
-        fontsize=11, fontweight="bold", color=NO_MSA_COLOR)
-ax.text(np.mean(xs[n_no:]), ax.get_ylim()[1], "MSA", ha="center", va="top",
-        fontsize=11, fontweight="bold", color=MSA_COLOR)
-save_fig(fig, "ra_eff_boxplot")
+ax.axvline(gap_x, color="lightgrey", lw=1)
+
+# Correct-pose counts sit above each box, replacing the old separate barplot.
+top = ax.get_ylim()[1]
+for x, c in zip(xs, combos):
+    n_ok = int((series[c] < RA_EFF_THRESHOLD).sum())
+    ax.text(x, top * 1.15, f"{n_ok}/{len(series[c])}", ha="center",
+            va="bottom", fontsize=8, fontweight="bold")
+ax.set_ylim(ax.get_ylim()[0], top * 1.8)
+handles = [plt.Rectangle((0, 0), 1, 1, fc=c, alpha=0.55, ec="black")
+           for c in (NO_MSA_COLOR, MSA_COLOR)]
+ax.legend(handles, ["No MSA", "MSA"], loc="center left",
+          bbox_to_anchor=(1.01, 0.5), frameon=True, fontsize=10)
+save_fig(fig, "fig1_pose_accuracy", thesis=True)
 plt.show()
+
+summary = []
+for f, m in combos:
+    y = series[(f, m)]
+    summary.append({"model": m, "msa": f, "n": len(y),
+                    "median ra_eff": round(float(np.median(y)), 2),
+                    "n correct": int((y < RA_EFF_THRESHOLD).sum()),
+                    "% correct": round(100 * (y < RA_EFF_THRESHOLD).mean(), 1)})
+pd.DataFrame(summary).sort_values("median ra_eff").reset_index(drop=True)
 ```
 
 **What this shows:**
 
-- One box per model/MSA/constraint combo (No-MSA group left, MSA group right, each
-  sorted by median `ra_eff`), with every target overlaid as a jittered point and
-  the dashed line at the 5 Å correct-pose cutoff.
-- The MSA group sits markedly lower than the No-MSA group: providing an MSA is the
-  single biggest driver of effector-pose accuracy here.
-- Within No-MSA, AF3 and ESMFold2 have the tightest, lowest distributions, while
-  ColabFold without an MSA is the weakest.
+- The MSA group sits markedly lower than the No-MSA group. Providing an MSA is
+  the single biggest driver of effector-pose accuracy here.
+- AlphaFold3 with an MSA is the strongest combo on both median and count.
+- ESMFold2 is the strongest No-MSA method by median `ra_eff`, ahead of AF3
+  without an MSA. Read that alongside section 9, since ESMFold2 also has the
+  largest potential training overlap of any model assessed.
+- The constrained Boltz variants do not pay for themselves. Boltz-1 constrained
+  is slightly worse than plain Boltz-1 on both median and count, and Boltz-2
+  constrained is indistinguishable from plain Boltz-2.
+- **Caption note for the thesis.** Section 11 establishes a floor of roughly 23
+  percentage points on this benchmark's own reproducibility, measured from two
+  references that encode the same complex with an identical effector sequence
+  (5A6W and 6G10, 54% versus 77%). Differences between combos smaller than that
+  should not be read as differences in capability.
 
 ---
 
-## 3. Successful-pose rate
+## 4. Which targets are hardest?
+
+For each of the 18 Tier-1 complexes, how many of the 13 model/MSA combos placed
+the effector correctly (`ra_eff` < 5 Å)? Split by system, Pik on the left and
+RGA5 on the right, mirroring the grouping used in section 2.
 
 ```{python}
-# Full display names (no abbreviations) and family colours: AlphaFold/ColabFold
-# = blues, Boltz = greens, Chai = yellow, ESMFold = red.
-FULL_NAMES = {
-    "af2m": "AlphaFold2-Multimer", "af3": "AlphaFold3",
-    "boltz1": "Boltz-1", "boltz1_constrained": "Boltz-1 (constrained)",
-    "boltz2": "Boltz-2", "boltz2_constrained": "Boltz-2 (constrained)",
-    "chai1": "Chai-1", "colabfold": "ColabFold", "esmfold2": "ESMFold2",
-}
-FAMILY_COLORS = {
-    "af3": "#08519c", "af2m": "#4292c6", "colabfold": "#9ecae1",
-    "boltz1": "#74c476", "boltz1_constrained": "#bae4b3",
-    "boltz2": "#238b45", "boltz2_constrained": "#00441b",
-    "chai1": "#fec44f", "esmfold2": "#e34a33",
-}
+SYS_COLORS = {"Pik": "#4C72B0", "RGA5": "#DD8452"}
+N_COMBOS = len(combos)
 
-# Alphabetical (by full name) within each MSA group.
-b_no  = sorted((m for f, m in combos if f == "no_msa"), key=lambda m: FULL_NAMES[m])
-b_msa = sorted((m for f, m in combos if f == "msa"),    key=lambda m: FULL_NAMES[m])
-b_combos = [("no_msa", m) for m in b_no] + [("msa", m) for m in b_msa]
-b_nno = len(b_no)
-b_xs = list(range(b_nno)) + [b_nno + 1.0 + i for i in range(len(b_msa))]
-b_counts = [int((series[c] < RA_EFF_THRESHOLD).sum()) for c in b_combos]
-b_ns = [len(series[c]) for c in b_combos]
-b_colors = [FAMILY_COLORS[m] for _, m in b_combos]
-b_labels = [FULL_NAMES[m] for _, m in b_combos]
+# Correct-pose count per target, ordered by system then by count (hardest last).
+per_pdb = (df.assign(ok=df[RA_COL] < RA_EFF_THRESHOLD)
+             .groupby(["system", "pdb"])["ok"].sum().astype(int)
+             .reset_index())
+blocks = [(s, per_pdb[per_pdb["system"] == s].sort_values("ok", ascending=False))
+          for s in ["Pik", "RGA5"]]
 
-fig, ax = plt.subplots(figsize=(max(10, 0.6 * len(b_combos) + 3), 6))
-ax.bar(b_xs, b_counts, width=0.92, color=b_colors, edgecolor="black", linewidth=0.8)
-for x, k, nn in zip(b_xs, b_counts, b_ns):
-    ax.text(x, k + 0.15, f"{k}/{nn}", ha="center", va="bottom", fontsize=8)
+# bounds stores the first and last x POSITION of each system block (not list
+# indices), since the 1.2 gap makes positions and indices diverge.
+p_xs, p_h, p_lab, p_col, bounds = [], [], [], [], []
+cursor = 0.0
+for name, blk in blocks:
+    start = cursor
+    for _, r in blk.iterrows():
+        p_xs.append(cursor); p_h.append(int(r["ok"])); p_lab.append(r["pdb"])
+        p_col.append(SYS_COLORS[name]); cursor += 1
+    bounds.append((name, start, cursor - 1))
+    cursor += 1.2   # gap between systems
 
-# "No MSA" / "MSA" header cells above the bars (like two table-header cells).
-band_lo = max(b_counts) + 0.9
+fig, ax = plt.subplots(figsize=(max(10, 0.55 * len(p_xs) + 3), 6))
+ax.bar(p_xs, p_h, width=0.85, color=p_col, edgecolor="black", linewidth=0.8)
+for x, h in zip(p_xs, p_h):
+    ax.text(x, h + 0.15, str(h), ha="center", va="bottom", fontsize=8)
+
+band_lo = N_COMBOS + 0.9
 band_hi = band_lo + 1.1
-for name, gxs in [("No MSA", b_xs[:b_nno]), ("MSA", b_xs[b_nno:])]:
-    x0, x1 = min(gxs) - 0.46, max(gxs) + 0.46
+for name, xa, xb in bounds:
+    x0, x1 = xa - 0.46, xb + 0.46
     ax.add_patch(plt.Rectangle((x0, band_lo), x1 - x0, band_hi - band_lo,
-                               facecolor="#e0e0e0", edgecolor="black", linewidth=0.8))
-    ax.text((x0 + x1) / 2, (band_lo + band_hi) / 2, name, ha="center", va="center",
-            fontsize=11, fontweight="bold", color="black")
+                               facecolor=SYS_COLORS[name], alpha=0.30,
+                               edgecolor="black", linewidth=0.8))
+    ax.text((x0 + x1) / 2, (band_lo + band_hi) / 2, name, ha="center",
+            va="center", fontsize=11, fontweight="bold")
 
-ax.set_xticks(b_xs)
-ax.set_xticklabels(b_labels, rotation=45, ha="right", fontsize=9)
-ax.set_ylabel(f"Number of targets with ra_eff < {RA_EFF_THRESHOLD:g} Å")
+ax.set_xticks(p_xs)
+ax.set_xticklabels(p_lab, rotation=45, ha="right", fontsize=9)
+ax.set_ylabel(f"Models with receptor-aligned effector\nRMSD < {RA_EFF_THRESHOLD:g} Å")
 ax.set_ylim(0, band_hi + 0.4)
-ax.set_xlim(-0.7, b_xs[-1] + 0.7)
-save_fig(fig, "success_rate_barplot")
+save_fig(fig, "fig3_per_target_difficulty", thesis=True)
 plt.show()
 ```
 
 **What this shows:**
 
-- The number of targets each combo poses correctly (`ra_eff` < 5 Å), as a count
-  and fraction of the assessed targets, alphabetical within each MSA group and
-  coloured by model family (AlphaFold/ColabFold blue, Boltz green, Chai yellow,
-  ESMFold red).
-- The MSA combos lead; AlphaFold3 with an MSA is the strongest overall.
-- The same model can rank very differently with vs without an MSA — ColabFold is
-  the clearest example.
+- Per-target difficulty. A tall bar is a complex nearly every method gets right,
+  a short bar is one almost nothing solves. The dotted line marks all
+  {python} f"{N_COMBOS}" combos.
+- Difficulty is not uniform across Tier 1, so the aggregate medians in section 2
+  average over targets that behave very differently.
 
 ---
 
-## 4. Training-set membership
+## 5. Interface confidence on correctly posed predictions
 
-How many benchmark structures could each model have *seen during training*? A
-structure counts as in-training when its PDB **initial release date** is on or
-before that model's published training-data cutoff (release date, not deposit
-date — the AF/Boltz/Chai pipelines filter the PDB by release date).
+All 18 Tier-1 complexes are experimentally determined bound structures, so
+every case is a true interaction. Restricting to predictions that got the pose
+right (`ra_eff` < 5 Å), do the interface confidence scores actually call them
+as binders? The dashed line marks the commonly used 0.8 cutoff.
 
 ```{python}
-# Published PDB training cutoffs (release-date filter); full model names.
+ok = df[df[RA_COL] < RA_EFF_THRESHOLD]
+bad = df[df[RA_COL] >= RA_EFF_THRESHOLD]
+CONF_THRESHOLD = 0.8
+# 2x2 grid: pLDDT top-left, ipTM top-right, ipSAE bottom-left,
+# actifpTM bottom-right.
+metrics = [("plddt", "pLDDT / 100"), ("iptm", "ipTM"),
+           ("ipsae_min", "ipSAE (min)"), ("actifptm", "actifpTM")]
+
+fig, axes = plt.subplots(2, 2, figsize=(11, 8.4), sharey=True, sharex=True)
+rng = np.random.default_rng(0)
+for ax, (col, lab) in zip(axes.flat, metrics):
+    for i, (grp, gname, gcol) in enumerate(
+            [(ok, f"correct (<{RA_EFF_THRESHOLD:g} Å)", "#0072B2"),
+             (bad, f"incorrect (>={RA_EFF_THRESHOLD:g} Å)", "#D55E00")]):
+        y = grp[col].dropna().values
+        if col == "plddt":
+            y = y / 100.0
+        ax.scatter(y, i + rng.uniform(-0.16, 0.16, len(y)), s=26, color=gcol,
+                   alpha=0.6, edgecolor="black", linewidth=0.3)
+        ax.plot([np.median(y)] * 2, [i - 0.3, i + 0.3], color="black", lw=2)
+    ax.axvline(CONF_THRESHOLD, ls="--", color="grey", lw=1.2)
+    ax.set_xlim(-0.03, 1.03)
+    ax.set_xlabel(lab)
+    ax.set_yticks([0, 1])
+    ax.set_yticklabels([f"correct\n(<{RA_EFF_THRESHOLD:g} Å)",
+                        f"incorrect\n(>={RA_EFF_THRESHOLD:g} Å)"])
+fig.tight_layout()
+save_fig(fig, "fig2_interface_confidence", thesis=True)
+plt.show()
+
+rows = []
+for col, lab in metrics:
+    rows.append({
+        "metric": lab,
+        "median (correct)": round(float(ok[col].median()), 3),
+        f">= {CONF_THRESHOLD:g} (correct)":
+            f"{int((ok[col] >= CONF_THRESHOLD).sum())}/{len(ok)} "
+            f"({100 * (ok[col] >= CONF_THRESHOLD).mean():.0f}%)",
+        "median (incorrect)": round(float(bad[col].median()), 3),
+        f">= {CONF_THRESHOLD:g} (incorrect)":
+            f"{int((bad[col] >= CONF_THRESHOLD).sum())}/{len(bad)} "
+            f"({100 * (bad[col] >= CONF_THRESHOLD).mean():.0f}%)",
+    })
+pd.DataFrame(rows)
+```
+
+**What this shows:**
+
+- The 0.8 cutoff is conservative. It is rarely wrong when it fires, since few
+  incorrect poses clear it, but it misses a substantial share of predictions
+  that were in fact correctly posed.
+- Read as a binder-calling rule on complexes that are all genuinely bound, a
+  0.8 threshold would therefore produce false negatives at a meaningful rate.
+  Treat it as a high-precision, low-recall filter rather than a decision
+  boundary.
+- Interface scores separate correct from incorrect poses far more cleanly than
+  pLDDT does in section 5, which is the expected behaviour given pLDDT is
+  dominated by monomer fold quality.
+- Caveat on interpretation. Tier 1 spans a wide range of binding affinities,
+  including AVR-PikC pairings and engineered HMA variants designed to restore
+  or alter recognition. A low interface score on a genuinely weak complex is
+  not necessarily a model failure.
+
+---
+
+## 6. Confidence as a filter: where should the cutoff be?
+
+Section 5 fixed the cutoff at 0.8. This section asks what cutoff the data
+actually supports, using **all {python} f"{len(pred):,}"** predictions rather
+than the best pose per combo, so the failures are represented too.
+
+```{python}
+def auc(score, y):
+    """ROC AUC via the rank identity, so no scipy/sklearn dependency."""
+    score, y = np.asarray(score, float), np.asarray(y, bool)
+    m = ~np.isnan(score)
+    score, y = score[m], y[m]
+    n1, n0 = int(y.sum()), int((~y).sum())
+    if n1 == 0 or n0 == 0:
+        return np.nan
+    r = pd.Series(score).rank().values
+    return (r[y].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)
+
+
+def roc_curve(score, y):
+    score, y = np.asarray(score, float), np.asarray(y, bool)
+    m = ~np.isnan(score)
+    score, y = score[m], y[m]
+    order = np.argsort(-score)
+    y = y[order]
+    tpr = np.concatenate([[0], np.cumsum(y) / max(y.sum(), 1)])
+    fpr = np.concatenate([[0], np.cumsum(~y) / max((~y).sum(), 1)])
+    return fpr, tpr
+
+
+METRICS = [("iptm", "ipTM"), ("actifptm", "actifpTM"), ("ipsae_min", "ipSAE"),
+           ("ptm", "pTM"), ("plddt", "pLDDT")]
+MCOLORS = dict(zip([m for m, _ in METRICS],
+                   ["#0072B2", "#009E73", "#D55E00", "#CC79A7", "#E69F00"]))
+
+y_all = pred["correct"].values
+
+# Only the threshold sweep is plotted.  A ROC panel was dropped: it showed the
+# same ordering as the per-model AUC table below and cost a full panel to do it.
+fig, axt = plt.subplots(figsize=(7.6, 5.6))
+grid = np.linspace(0.05, 0.95, 91)
+for col, lab in [("iptm", "ipTM"), ("actifptm", "actifpTM"), ("ipsae_min", "ipSAE")]:
+    v = pred[col].values
+    rec = [((v >= th) & y_all).sum() / y_all.sum() for th in grid]
+    prc = [((v >= th) & y_all).sum() / max((v >= th).sum(), 1) for th in grid]
+    axt.plot(grid, rec, color=MCOLORS[col], lw=1.8, label=f"{lab} recall")
+    axt.plot(grid, prc, color=MCOLORS[col], lw=1.8, ls="--",
+             label=f"{lab} precision")
+axt.axvline(0.8, ls="--", color="grey", lw=1.2)
+axt.text(0.8, 0.02, " 0.8", color="grey", fontsize=9)
+axt.set_xlabel("Threshold")
+axt.set_ylabel("Recall (solid) / precision (dashed)")
+axt.set_title("Cost of the cutoff")
+axt.legend(frameon=False, fontsize=8, ncol=2, loc="lower left")
+save_fig(fig, "supp_confidence_threshold_sweep")
+plt.show()
+
+sweep = []
+for t in [0.5, 0.6, 0.7, 0.8, 0.9]:
+    v = pred["iptm"].values >= t
+    sweep.append({"ipTM threshold": t,
+                  "recall": round(float((v & y_all).sum() / y_all.sum()), 2),
+                  "FPR": round(float((v & ~y_all).sum() / (~y_all).sum()), 2),
+                  "precision": round(float((v & y_all).sum() / max(v.sum(), 1)), 2)})
+pd.DataFrame(sweep)
+```
+
+**What this shows:**
+
+- All five scores separate correct from incorrect poses well, with pooled AUCs
+  in the 0.89 to 0.94 range.
+- The precision curves are strikingly flat above about 0.5 while recall falls
+  away steeply. Raising the cutoff from 0.5 to 0.8 buys almost no precision and
+  costs real recall.
+- **Caveat on the pooled AUC.** Pooling every model together lets a score win by
+  proxying for *which model made the prediction*, since strong models produce
+  both better poses and higher confidence. The per-model table below removes
+  that confound, and is the honest measure of within-run discrimination.
+
+```{python}
+rows = []
+for (m, f), g in pred.groupby(["model", "msa"]):
+    yg = g["correct"].values
+    row = {"model": f"{m}/{f}", "n": len(g), "% correct": round(100 * yg.mean())}
+    row.update({lab: round(auc(g[col].values, yg), 3) for col, lab in METRICS})
+    rows.append(row)
+per_model_auc = pd.DataFrame(rows).sort_values("% correct", ascending=False)
+per_model_auc
+```
+
+**What this shows:**
+
+- Within-model discrimination stays high, so confidence is genuinely
+  informative and not just a model-identity proxy.
+- **ipSAE is degenerate for Chai-1** (AUC exactly 0.500). Its `ipsae_min` is
+  identically 0.0 across all Chai-1 predictions, so the metric is not being
+  computed for that predictor. Treat Chai-1 ipSAE as missing, not as zero.
+- pTM and pLDDT score at least as well as the interface-specific measures here.
+  On a benchmark where both partners are small, well-folded domains, global
+  confidence largely tracks whether the docking worked.
+
+---
+
+## 7. How much does running 25 predictions buy you?
+
+Every combo runs 5 seeds x 5 diffusion samples. `combined_metrics.csv` reports
+the **oracle** best of those 25, which is only available when you already have
+the answer. In a design setting you must instead pick using the model's own
+confidence. This compares three selection rules.
+
+```{python}
+sel = []
+for (m, f, pdb_id), g in pred.groupby(["model", "msa", "pdb"]):
+    gi = g.dropna(subset=["iptm"])
+    if not len(gi):
+        continue
+    sel.append({"model": m, "msa": f, "pdb": pdb_id,
+                "oracle": g[RA_COL].min(),
+                "by_iptm": gi.loc[gi["iptm"].idxmax(), RA_COL],
+                "median": g[RA_COL].median()})
+sel = pd.DataFrame(sel)
+
+RULES = [("oracle", "oracle best-of-25", "#0072B2"),
+         ("by_iptm", "pick highest ipTM", "#009E73"),
+         ("median", "median prediction", "#D55E00")]
+
+order = (sel.groupby(["model", "msa"])["oracle"].median()
+            .sort_values().index.tolist())
+xs_s = np.arange(len(order))
+fig, ax = plt.subplots(figsize=(max(11, 0.9 * len(order) + 3), 6))
+w = 0.27
+for i, (col, lab, c) in enumerate(RULES):
+    vals = [100 * (sel[(sel["model"] == m) & (sel["msa"] == f)][col] < RA_EFF_THRESHOLD).mean()
+            for m, f in order]
+    ax.bar(xs_s + (i - 1) * w, vals, width=w, color=c, edgecolor="black",
+           linewidth=0.6, label=lab)
+ax.set_xticks(xs_s)
+ax.set_xticklabels([f"{pretty(m)}\n{f}" for m, f in order], rotation=45,
+                   ha="right", fontsize=8)
+ax.set_ylabel(f"% of targets with ra_eff < {RA_EFF_THRESHOLD:g} Å")
+ax.set_title("Selection rule matters as much as model choice")
+ax.legend(frameon=False)
+save_fig(fig, "supp_selection_rule")
+plt.show()
+
+overall = {lab: f"{100 * (sel[col] < RA_EFF_THRESHOLD).mean():.0f}%"
+           for col, lab, _ in RULES}
+regret = sel["by_iptm"] - sel["oracle"]
+print("Overall success rate by selection rule:", overall)
+print(f"Regret of the ipTM pick vs oracle: median {regret.median():.2f} Å, "
+      f"mean {regret.mean():.2f} Å")
+print(f"Correct pose available but missed by the ipTM pick: "
+      f"{int(((sel['oracle'] < 5) & (sel['by_iptm'] >= 5)).sum())}/{len(sel)}")
+```
+
+**What this shows:**
+
+- The oracle number that section 2 reports is optimistic. Picking by ipTM
+  instead recovers most of that advantage but not all of it, and taking a
+  middling prediction is far worse again.
+- The gap between rules is largest exactly where the model is unreliable.
+  AF2-Multimer and ColabFold with an MSA generate occasional excellent poses
+  among mostly poor ones, so their oracle score flatters them badly.
+- For a design pipeline this is the actionable number. Sampling widely helps
+  only to the extent that confidence can then find the good pose.
+- Note ESMFold2 runs 5 predictions rather than 25, so its bars are not directly
+  comparable on sampling depth.
+
+---
+
+## 8. Is the difficulty in the fold or the interface?
+
+`ra_eff` is measured after superposing the receptor, so it isolates the
+effector's placement. Comparing it against the receptor's own RMSD separates a
+failure to fold from a failure to dock. A scatter was replaced by this table:
+the whole result is three numbers and the plot added nothing.
+
+```{python}
+rec_ok = pred["rmsd_receptor"] < 2.0
+eff_ok = pred["correct"]
+pd.DataFrame([
+    {"outcome": "receptor folded (< 2 Å)",
+     "n": int(rec_ok.sum()), "% of predictions": round(100 * rec_ok.mean(), 1)},
+    {"outcome": "effector docked (< 5 Å)",
+     "n": int(eff_ok.sum()), "% of predictions": round(100 * eff_ok.mean(), 1)},
+    {"outcome": "receptor right, effector wrong",
+     "n": int((rec_ok & ~eff_ok).sum()),
+     "% of predictions": round(100 * (rec_ok & ~eff_ok).mean(), 1)},
+    {"outcome": "both wrong",
+     "n": int((~rec_ok & ~eff_ok).sum()),
+     "% of predictions": round(100 * (~rec_ok & ~eff_ok).mean(), 1)},
+])
+```
+
+**What this shows:**
+
+- Monomer folding of these small HMA domains is effectively solved, while the
+  effector is placed correctly far less often. Nearly half of all predictions
+  fold the receptor correctly and still dock the effector wrongly.
+- The benchmark is therefore measuring interface placement, not folding. This
+  is why pLDDT is a weak guide in section 5: it is dominated by the part of the
+  problem that almost never fails.
+
+---
+
+## 9. Training-set membership
+
+How many Tier-1 structures could each model have seen during training? A
+structure counts as exposed when its PDB **initial release date** is on or
+before that model's published training cutoff (release date, not deposition
+date, since the AF/Boltz/Chai pipelines filter the PDB by release).
+
+This was a stacked bar chart. It is five numbers and reads better as a table,
+so the figure was dropped. Exposure is context for interpreting section 2, not
+a result in itself, and section 10 explains why no causal claim follows from it.
+
+```{python}
 MODEL_CUTOFFS = {
     "AlphaFold2-Multimer": "2018-04-30",   # Jumper 2021 / Evans 2021
     "ColabFold":           "2018-04-30",   # AF2/AF2-Multimer weights
@@ -223,56 +696,527 @@ MODEL_CUTOFFS = {
     "AlphaFold3":          "2021-09-30",   # Abramson et al. 2024 Nature
     "Boltz-1":             "2021-09-30",   # Wohlwend et al. 2024 (= AF3)
     "Boltz-2":             "2023-06-01",   # Boltz-2 report (2025)
-    # Biohub ESMFold2 (ESMC-6B) production "cutoff2025" checkpoint — its recent
-    # held-out PPI eval set starts 2025-06-30 (biohub preprint, 2026). This is
-    # NOT the original 2020 ESM-2 ESMFold.
+    # Biohub ESMFold2 (ESMC-6B) "cutoff2025" checkpoint, not the 2020 ESMFold.
     "ESMFold2":            "2025-06-30",
 }
-
 rel = pd.read_csv(dates_path, parse_dates=["release_date"])
-rel = rel[rel["pdb"].isin(df["pdb"].unique())]   # only assessed targets
+rel = rel[rel["pdb"].isin(df["pdb"].unique())]
 N = len(rel)
 
-models = sorted(MODEL_CUTOFFS, key=lambda m: MODEL_CUTOFFS[m])
-in_train = [int((rel["release_date"] <= pd.Timestamp(MODEL_CUTOFFS[m])).sum())
-            for m in models]
-clean = [N - k for k in in_train]
-
-# Colourblind-safe pair (Okabe-Ito): orange = potential leakage, blue = clean.
-x = np.arange(len(models))
-fig, ax = plt.subplots(figsize=(max(9, 1.1 * len(models) + 2), 6))
-ax.bar(x, in_train, color="#D55E00", label="in training set")
-ax.bar(x, clean, bottom=in_train, color="#0072B2", label="after cutoff")
-for xi, k in zip(x, in_train):
-    ax.text(xi, k / 2 if k else 0.3, f"{k}", ha="center", va="center",
-            color="white", fontweight="bold", fontsize=12)
-    ax.text(xi, N + 0.3, f"{k}/{N}", ha="center", va="bottom", fontsize=9)
-ax.set_xticks(x)
-ax.set_xticklabels([f"{m}\n(≤ {MODEL_CUTOFFS[m]})" for m in models], fontsize=9)
-ax.set_ylabel("Number of benchmark structures")
-ax.set_ylim(0, N + 5)
-# Legend inside, above the bars (stacked bars all reach N, leaving room above).
-ax.legend(loc="upper center", ncol=2, frameon=False, fontsize=10)
-save_fig(fig, "training_set_membership")
-plt.show()
+exposure = pd.DataFrame([
+    {"model": m, "training cutoff": c,
+     "exposed": int((rel["release_date"] <= pd.Timestamp(c)).sum()),
+     "held out": N - int((rel["release_date"] <= pd.Timestamp(c)).sum()),
+     "% exposed": round(100 * (rel["release_date"] <= pd.Timestamp(c)).mean())}
+    for m, c in sorted(MODEL_CUTOFFS.items(), key=lambda kv: kv[1])
+])
+exposure
 ```
 
 **What this shows:**
 
-- For each model, how many assessed benchmark structures were released on/before
-  its training cutoff (orange = potential train-set overlap) vs after it (blue =
-  clean test case), ordered by cutoff date.
-- AF2-Multimer / ColabFold (2018 cutoff) have seen almost none of the benchmark,
-  so their numbers are the closest to a leakage-free test; the newer models have
-  progressively more overlap.
-- **ESMFold2 (2025 cutoff) has the most overlap of all** — as a 2026-era model it
-  may have trained on nearly every benchmark structure, so its accuracy above
-  should be read with that caveat. Only the targets released after a model's
-  cutoff are unambiguously held out for it.
+- AF2-Multimer and ColabFold, on a 2018 cutoff, have seen almost none of Tier 1,
+  so they are the closest thing here to a leakage-free test. Every newer model
+  has progressively more exposure.
+- ESMFold2 and Boltz-2 could have seen 16 of the 18.
+- Exposure runs opposite to the ranking in section 2: the combos at the top have
+  seen the most. That is a reason for caution, not a demonstration of leakage.
+  See section 10.
 
 ---
 
-## 5. Summary
+## 10. Can this benchmark test for training-set leakage?
+
+Section 9 counts exposure. It does not show that exposure *caused* anything.
+The naive test, comparing accuracy before and after each cutoff, is worthless
+at n=18 because a single hard structure moves it.
+
+A better design uses the near-identical pairs from section 11. Where two
+references differ by a couple of residues but sit on opposite sides of a
+model's cutoff, structure difficulty is matched by construction, so a
+systematic win for the in-training member would be evidence of leakage. A
+scatter of accuracy against release date was dropped in favour of this, since
+it could not separate the two effects and its labels overplotted.
+
+```{python}
+MODEL_CUT = {"af2m": "2018-04-30", "colabfold": "2018-04-30",
+             "chai1": "2021-01-12", "af3": "2021-09-30",
+             "boltz1": "2021-09-30", "boltz1_constrained": "2021-09-30",
+             "boltz2": "2023-06-01", "boltz2_constrained": "2023-06-01",
+             "esmfold2": "2025-06-30"}
+rel_all = pd.read_csv(dates_path, parse_dates=["release_date"])
+rdate = dict(zip(rel_all["pdb"], rel_all["release_date"]))
+
+sim_pairs = pd.read_csv(csv_path.parent / "reference_similarity.csv")
+sim_pairs = sim_pairs[(sim_pairs["receptor_identity"] >= 95) &
+                      (sim_pairs["effector_identity"] >= 95)]
+ok_lookup = {(r["model"], r["msa"], r["pdb"]): r[RA_COL] < RA_EFF_THRESHOLD
+             for _, r in df.iterrows()}
+
+rows = []
+for (m, f), _ in df.groupby(["model", "msa"]):
+    cut = pd.Timestamp(MODEL_CUT[m])
+    win_in = win_out = same = 0
+    for _, r in sim_pairs.iterrows():
+        a, b = r["pdb_a"], r["pdb_b"]
+        if (rdate[a] <= cut) == (rdate[b] <= cut):
+            continue                       # both sides of the cutoff, skip
+        seen, unseen = (a, b) if rdate[a] <= cut else (b, a)
+        A, B = ok_lookup.get((m, f, seen)), ok_lookup.get((m, f, unseen))
+        if A is None or B is None:
+            continue
+        if A and not B:
+            win_in += 1
+        elif B and not A:
+            win_out += 1
+        else:
+            same += 1
+    if win_in + win_out + same:
+        rows.append({"combo": f"{m}/{f}", "straddling pairs": win_in + win_out + same,
+                     "in-training better": win_in, "held-out better": win_out,
+                     "same outcome": same})
+matched = pd.DataFrame(rows)
+print(f"Totals across all combos: in-training better {matched['in-training better'].sum()}, "
+      f"held-out better {matched['held-out better'].sum()}, "
+      f"same {matched['same outcome'].sum()}")
+matched
+```
+
+**What this shows, and why it still fails:**
+
+- The totals lean towards the in-training member, and the effect is
+  concentrated in Chai-1 and the No-MSA combos. The strongest MSA models show
+  nothing at all: AF3 + MSA and Boltz-1 + MSA give the same outcome on all 11
+  of their straddling pairs.
+- **This is still not evidence of leakage.** The post-cutoff Tier-1 structures
+  are 7A8W, 7A8X, 7QPX and 7QZD, which are exactly the AVR-PikC and AVR-PikF
+  complexes and the engineered HMAs built to re-bind them. "Released recently"
+  and "recognition-evading interface" are the same set of structures here, for
+  reasons that have nothing to do with training data.
+- The pairs are also not independent, since a handful of structures appear in
+  many of them.
+- The one genuinely clean case points the other way. 5ZNG (2018) and 9IP6
+  (2025) differ by a single substitution and straddle every cutoff, and no
+  model changes its correct/incorrect verdict between them.
+
+```{python}
+clean = df[df["pdb"].isin(["5ZNG", "9IP6"])].pivot_table(
+    index=["model", "msa"], columns="pdb", values=RA_COL).round(2)
+clean.columns = ["5ZNG (in training)", "9IP6 (held out)"]
+clean["both correct?"] = np.where(
+    (clean.iloc[:, 0] < RA_EFF_THRESHOLD) == (clean.iloc[:, 1] < RA_EFF_THRESHOLD),
+    "same verdict", "DIFFERENT")
+clean
+```
+
+**Conclusion for this tier:** Tier 1 cannot test leakage, and no amount of
+reworking the statistics fixes that, because exposure is confounded with
+interface biology by construction. Section 9 should be read as a statement of
+what the models *could* have seen, not as an explanation of how they perform.
+Testing leakage properly needs the unrun tiers, which contain recent structures
+that are not evasion variants.
+
+---
+
+## 11. Do near-identical complexes behave the same?
+
+Tier 1 contains allelic effector series (AVR-PikD/E/A/C/F) and engineered HMA
+variants, so many references differ by only one or two residues. That makes it
+a natural sensitivity test. If prediction accuracy is a smooth function of the
+input, near-identical complexes should score alike. Pairs that are almost
+identical but score very differently are the interesting failures.
+
+Similarity is precomputed (needs biopython) with:
+`python bin/compute_reference_similarity.py --tier 1 --output analysis/structure_prediction_benchmark/reference_similarity.csv`
+
+```{python}
+sim = pd.read_csv(csv_path.parent / "reference_similarity.csv")
+acc_by_pdb = (df.assign(ok=df[RA_COL] < RA_EFF_THRESHOLD)
+                .groupby("pdb")["ok"].mean().mul(100))
+sim["acc_a"] = sim["pdb_a"].map(acc_by_pdb)
+sim["acc_b"] = sim["pdb_b"].map(acc_by_pdb)
+sim = sim.dropna(subset=["acc_a", "acc_b"])
+sim["acc_gap"] = (sim["acc_a"] - sim["acc_b"]).abs()
+
+NEAR = 95.0   # both chains at/above this identity counts as "near-identical"
+near = sim[(sim["receptor_identity"] >= NEAR) &
+           (sim["effector_identity"] >= NEAR)].copy()
+
+print(f"{len(near)} near-identical pairs (both chains >= {NEAR:g}% identical)")
+print(f"accuracy gap ranges {near['acc_gap'].min():.0f} to {near['acc_gap'].max():.0f} points")
+print(f"correlation between identity and accuracy agreement: "
+      f"{np.corrcoef(sim['min_identity'].rank(), sim['acc_gap'].rank())[0, 1]:+.3f} (Spearman)")
+
+cols = ["pdb_a", "pdb_b", "receptor_substitutions", "effector_substitutions",
+        "receptor_gap_positions", "effector_gap_positions",
+        "acc_a", "acc_b", "acc_gap"]
+show = near.sort_values("acc_gap", ascending=False)[cols].head(10).copy()
+for c in ["acc_a", "acc_b", "acc_gap"]:
+    show[c] = show[c].round(0).astype(int)
+show
+```
+
+**What this shows:**
+
+- Among pairs where **both** chains are at least {python} f"{NEAR:g}"% identical,
+  the accuracy gap still ranges from 0 to roughly 46 percentage points. Small
+  sequence changes do not produce correspondingly small accuracy changes.
+- The substitution columns make the size of the perturbation explicit. Several
+  of the widest gaps come from pairs with an identical receptor and a
+  single-digit number of effector substitutions.
+- Gap positions are listed separately because these are crystal constructs.
+  Some pairs share the same underlying protein and differ only in how much of
+  it was modelled, which is a reference-choice difference rather than a
+  biological one.
+
+```{python}
+# Pairs with zero substitutions in BOTH chains.  Zero substitutions alone is
+# NOT sufficient to call two references the same complex: a global alignment
+# reports a difference as a gap rather than a substitution when it falls in a
+# region one construct does not model, so an engineered residue sitting in an
+# unmodelled tail is invisible here.  Gap counts are therefore printed too, and
+# pairs with many gap positions are flagged rather than treated as controls.
+GAP_TOL = 6   # alignment gap positions below which the pair is a fair control
+
+same_seq = near[(near["receptor_substitutions"] == 0) &
+                (near["effector_substitutions"] == 0)].copy()
+same_seq["total_gaps"] = (same_seq["receptor_gap_positions"] +
+                          same_seq["effector_gap_positions"])
+if len(same_seq):
+    print("Pairs with no substitutions in either aligned chain:")
+    for _, r in same_seq.sort_values("total_gaps").iterrows():
+        flag = ("" if r["total_gaps"] <= GAP_TOL
+                else "   <-- verify the gapped region by hand")
+        print(f"  {r['pdb_a']} vs {r['pdb_b']}: "
+              f"{r['acc_a']:.0f}% vs {r['acc_b']:.0f}% "
+              f"(accuracy gap {r['acc_gap']:.0f} points; "
+              f"{int(r['receptor_gap_positions'])} receptor + "
+              f"{int(r['effector_gap_positions'])} effector gap positions)"
+              f"{flag}")
+else:
+    print("No zero-substitution pairs in this tier.")
+```
+
+**What this shows:**
+
+- Both pairs exceed the gap tolerance, so both were checked by hand. They gave
+  opposite answers, which is the point of the flag.
+- **5A6W vs 6G10** is the usable control. Both are Pikp-1 HMA with AVR-PikD, the
+  effector sequences are identical with no substitutions and no gaps, and the
+  receptors differ only in construct boundaries plus a two-residue indel. They
+  score 54% and 77%, a 23 point gap that cannot be attributed to sequence.
+- That gap is a floor on the benchmark's own reproducibility. It reflects the
+  choice of reference structure, including construct boundaries, crystal form
+  and which copy in the asymmetric unit was extracted. Model-to-model
+  differences smaller than this should not be read as differences in capability.
+- **5A6W vs 6R8K is not a valid control**, despite reporting zero substitutions.
+  6R8K carries the engineered NK-KE change in a C-terminal tail (`...QANK` in
+  6G10 becomes `...QAKED` in 6R8K) that 5A6W does not model at all, so the
+  alignment scores it as gap rather than substitution. This is the general
+  hazard with a substitution-only filter and is why the gap counts are shown.
+
+---
+
+## 11b. Are models internally consistent? (thesis figure 4)
+
+Section 11 showed that near-identical complexes can score very differently.
+This asks whether a *single* model does that, and whether its confidence
+notices.
+
+**Definition.** A pair of references is **near-identical** when *both* chains
+are at least 95% identical to their counterpart, where identity is the number of
+matched residues in a global BLOSUM62 alignment divided by the length of the
+shorter sequence. Both the receptor and the effector must clear the threshold,
+so a pair sharing a receptor but with an unrelated effector does not qualify.
+The pair count is printed below.
+Gap positions are not counted as mismatches, which is why section 11 reports
+substitution and gap counts separately.
+
+The two panels are written to separate files so they can be composed by hand.
+
+```{python}
+CASE_MODEL, CASE_MSA = "boltz2", "msa"
+
+lookup = {(r["model"], r["msa"], r["pdb"]): r for _, r in df.iterrows()}
+pairs_near = pd.read_csv(csv_path.parent / "reference_similarity.csv")
+pairs_near = pairs_near[(pairs_near["receptor_identity"] >= 95) &
+                        (pairs_near["effector_identity"] >= 95)]
+print(f"near-identical pairs (both chains >= 95% identical): {len(pairs_near)}")
+
+# ---- panel (a) -------------------------------------------------------------
+# Broken x-axis.  Every target but one sits above ipTM 0.78; 9IMU sits near
+# 0.36 because it is the single case where the confidence correctly flagged a
+# bad pose.  Dropping it would delete the only evidence this model's
+# confidence ever works, so the axis is split instead and all points labelled.
+pts = df[(df["model"] == CASE_MODEL) & (df["msa"] == CASE_MSA)]
+lo = pts[pts["iptm"] < 0.6]
+hi = pts[pts["iptm"] >= 0.6]
+
+# Both halves use the SAME data-units-per-inch: the width ratio is set from
+# the x-ranges themselves, so an equal x-distance is an equal on-page distance
+# either side of the break.
+LEFT_LIM, RIGHT_LIM = (0.352, 0.377), (0.775, 0.985)
+LEFT_W = LEFT_LIM[1] - LEFT_LIM[0]
+RIGHT_W = RIGHT_LIM[1] - RIGHT_LIM[0]
+
+figa, (axL, axR) = plt.subplots(
+    1, 2, sharey=True, figsize=(9.5, 6.4),
+    gridspec_kw={"width_ratios": [LEFT_W, RIGHT_W], "wspace": 0.04})
+
+for ax in (axL, axR):
+    for _, r in pairs_near.iterrows():
+        ra_, rb_ = (lookup.get((CASE_MODEL, CASE_MSA, r["pdb_a"])),
+                    lookup.get((CASE_MODEL, CASE_MSA, r["pdb_b"])))
+        if ra_ is None or rb_ is None:
+            continue
+        flips = ((ra_[RA_COL] < RA_EFF_THRESHOLD) !=
+                 (rb_[RA_COL] < RA_EFF_THRESHOLD))
+        ax.plot([ra_["iptm"], rb_["iptm"]], [ra_[RA_COL], rb_[RA_COL]],
+                color=("#D55E00" if flips else "#CCCCCC"),
+                lw=(1.0 if flips else 0.7), alpha=0.45,
+                zorder=(3 if flips else 1))
+    ax.scatter(pts["iptm"], pts[RA_COL], s=46, color="#0072B2",
+               edgecolor="black", linewidth=0.5, zorder=4)
+    ax.axhline(RA_EFF_THRESHOLD, ls="--", color="grey", lw=1)
+    ax.set_yscale("log")
+
+axL.set_xlim(*LEFT_LIM)
+axR.set_xlim(*RIGHT_LIM)
+# One tick on the narrow half, and start the wide half at 0.80, so no two tick
+# labels crowd each other across the break.
+axL.set_xticks([0.365])
+axR.set_xticks(np.arange(0.80, 0.99, 0.025))
+axR.axvline(0.8, ls="--", color="grey", lw=1)
+
+# Hide the facing spines; suppress y ticks on the right half so none appear in
+# the break gap.  Break marks go on both facing edges.
+axL.spines["right"].set_visible(False)
+axR.spines["left"].set_visible(False)
+axR.tick_params(axis="y", which="both", left=False, labelleft=False)
+kw = dict(marker=[(-1, -0.6), (1, 0.6)], markersize=9, linestyle="none",
+          color="k", mec="k", mew=1, clip_on=False)
+axL.plot([1, 1], [0, 1], transform=axL.transAxes, **kw)
+axR.plot([0, 0], [0, 1], transform=axR.transAxes, **kw)
+
+# Labels sit on the same y as their point and immediately beside it, so the
+# association is unambiguous.  Two targets would collide on the right, so they
+# are placed on the left instead.
+LABEL_LEFT = {"5ZNG", "9IP6", "6G11", "6R8M"}
+for ax, sub in ((axL, lo), (axR, hi)):
+    for _, r in sub.iterrows():
+        left = r["pdb"] in LABEL_LEFT
+        ax.annotate(r["pdb"], (r["iptm"], r[RA_COL]), fontsize=7,
+                    xytext=(-6 if left else 6, 0),
+                    textcoords="offset points", zorder=5,
+                    ha="right" if left else "left", va="center")
+
+axL.set_ylabel("Receptor-aligned effector RMSD (Å, log scale)")
+figa.supxlabel("ipTM", y=0.02)
+save_fig(figa, "fig4a_confidence_vs_pose", thesis=True)
+plt.show()
+```
+
+```{python}
+# ---- panel (b) -------------------------------------------------------------
+# Simplified: one bar per combo showing how many FEWER verdict changes than
+# expected the model makes.  Positive means more self-consistent than its own
+# accuracy would predict.  Grouped No-MSA then MSA, matching figure 1.
+rows = []
+for (m, f), g in df.groupby(["model", "msa"]):
+    acc = float((g[RA_COL] < RA_EFF_THRESHOLD).mean())
+    n = fl = 0
+    for _, r in pairs_near.iterrows():
+        A, B = (lookup.get((m, f, r["pdb_a"])), lookup.get((m, f, r["pdb_b"])))
+        if A is None or B is None:
+            continue
+        n += 1
+        fl += ((A[RA_COL] < RA_EFF_THRESHOLD) != (B[RA_COL] < RA_EFF_THRESHOLD))
+    exp = 2 * acc * (1 - acc) * n
+    rows.append({"model": m, "msa": f, "combo": combo_label(m, f),
+                 "accuracy": acc, "pairs": n, "flips": int(fl),
+                 "expected": exp, "fewer_than_expected": exp - fl})
+cons = pd.DataFrame(rows)
+
+blocks = [("no_msa", cons[cons["msa"] == "no_msa"]
+                        .sort_values("fewer_than_expected", ascending=False)),
+          ("msa", cons[cons["msa"] == "msa"]
+                      .sort_values("fewer_than_expected", ascending=False))]
+cx, cvals, ccols, clabs, cbounds = [], [], [], [], []
+cursor = 0.0
+for flag, blk in blocks:
+    start = cursor
+    for _, r in blk.iterrows():
+        cx.append(cursor); cvals.append(r["fewer_than_expected"])
+        ccols.append(MSA_COLOR if flag == "msa" else NO_MSA_COLOR)
+        clabs.append(pretty(r["model"])); cursor += 1
+    cbounds.append((flag, start, cursor - 1)); cursor += 1.2
+
+figb, axb = plt.subplots(figsize=(11, 6.2))
+axb.bar(cx, cvals, width=0.85, color=ccols, edgecolor="black", linewidth=0.7)
+axb.axhline(0, color="black", lw=1)
+axb.set_xticks(cx)
+axb.set_xticklabels(clabs, rotation=45, ha="right", fontsize=9)
+axb.set_ylabel("Consistency\n(expected \u2212 observed verdict changes)")
+handles = [plt.Rectangle((0, 0), 1, 1, fc=c, ec="black")
+           for c in (NO_MSA_COLOR, MSA_COLOR)]
+axb.legend(handles, ["No MSA", "MSA"], loc="center left",
+           bbox_to_anchor=(1.01, 0.5), frameon=True, fontsize=10)
+save_fig(figb, "fig4b_self_consistency", thesis=True)
+plt.show()
+
+out = cons[["combo", "accuracy", "pairs", "flips", "expected",
+            "fewer_than_expected"]].copy()
+out["accuracy"] = (100 * out["accuracy"]).round(0)
+out[["expected", "fewer_than_expected"]] = \
+    out[["expected", "fewer_than_expected"]].round(1)
+out.sort_values("fewer_than_expected", ascending=False)
+```
+
+**What this shows:**
+
+- **The headline case.** 6FU9 and 6FUB are both Pikm1-HMA, with an identical
+  receptor sequence, and their effectors (AVR-PikD and AVR-PikE) differ by a
+  single substitution. Boltz-2 with an MSA places one at about 1 Å and the other
+  at about 38 Å, and reports essentially the same ipTM for both. The model is
+  confidently wrong and has no internal signal that anything changed.
+- Every orange line in panel (a) is a pair where one member is solved and the
+  other is not. Their near-vertical slope is the point: the confidence axis
+  barely moves while the accuracy axis moves by an order of magnitude.
+- Panel (b) plots how many **fewer** verdict changes each combo makes than would
+  be expected if the two members of a pair were unrelated draws at that combo's
+  own accuracy. Above zero is more self-consistent than its accuracy alone
+  predicts, below zero is less. The adjustment matters because a raw flip count
+  punishes mid-accuracy models and flatters any model that is uniformly right or
+  uniformly wrong.
+- **AF3 + MSA (0 observed against 6.7 expected) and Boltz-1 + MSA (2 against
+  11.8) are genuinely self-consistent**, not merely accurate. **Boltz-2 + MSA
+  sits at its expectation (14 against 13.6)**, meaning knowing it solved one
+  member of a near-identical pair tells you nothing about the other. Chai-1 is
+  slightly worse than chance.
+- Restricted to the No-MSA combos, ESMFold2 (9 against 16.2) and Boltz-2 (12
+  against 17.0) are the most self-consistent, while AF3 without an MSA sits at
+  its expectation (17 against 16.2) despite being the most accurate No-MSA
+  combo. Choosing Boltz-2 over AF3 in a No-MSA setting therefore trades two
+  targets of accuracy (9/18 against 11/18) for materially better behaviour under
+  small sequence changes.
+- These 34 pairs are drawn from 18 structures and overlap heavily, so the
+  ordering is indicative rather than firm. The separation between neighbouring
+  combos should not be pressed.
+- **ColabFold without an MSA should be ignored on this panel.** It records 0
+  flips, but it solves 1 target in 18, so almost no pair can straddle the
+  threshold and its expectation is only 3.6. Its positive bar reflects failure,
+  not consistency.
+- **Boltz-2 (constrained) is absent by design.** Its predicted structures are
+  byte identical to unconstrained Boltz-2 across all 18 targets, so it is a
+  duplicated record rather than a result. See section 1.2.
+- For a design pipeline this is the property that matters. A variant one or two
+  residues from a well-predicted complex is exactly what a resurfacing campaign
+  generates, and a model at chance on such pairs cannot rank designs even if its
+  aggregate accuracy looks strong.
+- It also rules out using interface confidence as a substitute for a geometric
+  check against the intended pose, since the confidence does not move when the
+  pose collapses.
+
+---
+
+## 11c. Compute cost (thesis figure 5)
+
+Wall-clock and peak memory per run, from Nextflow's trace, plotted against each
+other. Within-combo spread is negligible for everything except ESMFold2 and
+AlphaFold2-Multimer, so medians summarise each combo fairly and a single
+scatter replaces what were two boxplot panels.
+
+**One caveat the axes cannot show.** A "run" is 5 seeds x 5 diffusion samples,
+i.e. 25 predictions, for every combo *except ESMFold2*, which produces 5.
+Position on the x-axis therefore flatters ESMFold2, and the per-prediction
+column in the table below is the fair comparison.
+
+```{python}
+med = (rt.groupby(["model", "msa"])
+         .agg(runtime=("elapsed_min", "median"),
+              memory=("peak_rss_gb", "median"))
+         .reset_index())
+
+figc, axc = plt.subplots(figsize=(8.4, 6.4))
+# zorder rather than draw order, so No-MSA sits on top of MSA where the two
+# variants coincide while the legend keeps the same No MSA / MSA order as
+# figure 1.
+for flag, col, lab, z in [("no_msa", NO_MSA_COLOR, "No MSA", 4),
+                          ("msa", MSA_COLOR, "MSA", 3)]:
+    sub = med[med["msa"] == flag]
+    axc.scatter(sub["runtime"], sub["memory"], s=90, color=col, alpha=0.65,
+                edgecolor="black", linewidth=0.6, label=lab, zorder=z)
+
+# Keyed on (model, msa) because the two variants of a model can sit almost on
+# top of each other, so the collision is between variants, not between models.
+LABEL_LEFT_C = {("af2m", "msa"), ("esmfold2", "no_msa"),
+                ("boltz1", "no_msa"), ("boltz2", "no_msa"),
+                ("colabfold", "no_msa")}
+for _, r in med.iterrows():
+    # No MSA/No-MSA suffix: the point colour already encodes it.
+    name = DISPLAY.get(r["model"], r["model"])
+    left = (r["model"], r["msa"]) in LABEL_LEFT_C
+    axc.annotate(name, (r["runtime"], r["memory"]), fontsize=7.5,
+                 xytext=(-8 if left else 8, 0), textcoords="offset points",
+                 ha="right" if left else "left", va="center", zorder=5)
+
+axc.set_xscale("log")
+readable_log(axc.xaxis, TIME_TICKS)
+axc.set_xlabel("Median wall-clock per run (minutes, log scale)")
+axc.set_ylabel("Median peak resident memory (GB)")
+axc.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=True,
+           fontsize=10)
+save_fig(figc, "fig5_cost_tradeoff", thesis=True)
+plt.show()
+```
+
+```{python}
+N_PREDICTIONS = {"esmfold2": 5}     # every other combo runs 5 seeds x 5 samples
+cost = (rt.groupby(["model", "msa"])
+          .agg(n_targets=("elapsed_min", "size"),
+               mean_min=("elapsed_min", "mean"),
+               median_min=("elapsed_min", "median"),
+               min_min=("elapsed_min", "min"),
+               max_min=("elapsed_min", "max"),
+               mean_peak_rss_gb=("peak_rss_gb", "mean"))
+          .reset_index())
+cost["predictions"] = cost["model"].map(lambda m: N_PREDICTIONS.get(m, 25))
+cost["min_per_prediction"] = cost["mean_min"] / cost["predictions"]
+cost["combo"] = [combo_label(m, f) for m, f in zip(cost["model"], cost["msa"])]
+cost = cost[["combo", "n_targets", "mean_min", "median_min", "min_min",
+             "max_min", "predictions", "min_per_prediction",
+             "mean_peak_rss_gb"]].round(2)
+cost.sort_values("min_per_prediction").reset_index(drop=True)
+```
+
+**What this shows:**
+
+- Cost spans two orders of magnitude. AF3 without an MSA is the cheapest at
+  under 2 minutes, while AF2-Multimer takes about two hours, almost all of it
+  in its own MSA search.
+- **Per prediction, Boltz-2 is roughly four times cheaper than ESMFold2** and
+  uses about a third of the peak memory, despite the two looking comparable on
+  a per-run basis. Boltz-2 is also far more predictable, varying by seconds
+  across targets where ESMFold2 varies by minutes.
+- Memory does not track runtime. ColabFold sits bottom-right, slow but the
+  lightest of all, while ESMFold2 sits top-left, fast per run but the heaviest
+  bar AlphaFold2-Multimer. The cheap corner on both axes is where Boltz-2 and
+  AlphaFold3 without an MSA sit.
+- Under a fixed memory budget the ranking changes again, because ESMFold2 pays
+  twice: it is the heaviest model, so fewest instances fit, and it returns 5
+  predictions per run rather than 25. On a 1 TB host that is roughly 3,800
+  predictions per hour against about 58,000 for Boltz-2.
+- Combined with section 11b, this is the practical case for Boltz-2 in a No-MSA
+  design setting: better self-consistency than AlphaFold3 or Boltz-1, five
+  times the sampling per unit wall-clock, and a third of the memory. It costs
+  two targets of accuracy against AlphaFold3 without an MSA.
+- Runtimes come from 17 of the 18 targets, since one run has no usable trace
+  row. Queueing time is excluded, so these are execution times rather than
+  time-to-result on a busy cluster.
+
+---
+
+## 12. Summary
 
 ```{python}
 summary = []
@@ -293,17 +1237,28 @@ summary
 - A ranked table of every combo by median `ra_eff`, with its correct-pose count
   and percentage — the numeric companion to the plots above.
 
-## 6. Discussion
+## 13. Discussion
 
-- The MSA setting is the dominant factor in effector-pose accuracy; AF3 with an
-  MSA is the strongest method on this benchmark, with Boltz-1/Boltz-2 + MSA close
+- The MSA setting is the dominant factor in effector-pose accuracy. AF3 with an
+  MSA is the strongest method on Tier 1, with Boltz-1 and Boltz-2 + MSA close
   behind.
-- Training-set membership is a real confounder: the strongest newer models also
-  have the most potential data overlap, and ESMFold2 (2025 cutoff) could have seen
-  nearly the entire set. The handful of structures released after each cutoff are
-  the only unambiguously clean tests, and a leakage-controlled comparison would
+- Among No-MSA methods, ESMFold2 posts the lowest median `ra_eff`, narrowly
+  ahead of AF3 without an MSA.
+- The constrained Boltz variants do not pay for themselves on Tier 1. Boltz-1
+  constrained is slightly worse than plain Boltz-1 on both median and correct-pose
+  count, and Boltz-2 constrained is indistinguishable from plain Boltz-2. Pocket
+  and contact constraints are not currently buying accuracy on these complexes.
+- Training-set membership is a real confounder, and on Tier 1 it runs directly
+  opposite to the ranking. AF3 leads while potentially having seen 13 of the 18,
+  whereas AF2-Multimer and ColabFold sit mid-table having seen 1. ESMFold2 could
+  have seen 16 of 18. Only structures released after a given model's cutoff are
+  unambiguously held out for it, so a leakage-controlled comparison would
   restrict to those.
-- This analysis currently covers the completed subset of targets; the figures
-  regenerate unchanged as further benchmarks finish and `combined_metrics.csv` /
-  `pdb_release_dates.csv` are refreshed.
+- Tier 1 is homogeneous by construction, being small HMA / integrated-domain
+  pairs from two systems (Pik and RGA5). These results should not be read as
+  evidence about NLR-effector complex prediction in general. Tiers 2 to 4 remain
+  unrun and contain the structurally harder cases.
+- The figures regenerate unchanged as `combined_metrics.csv` and
+  `pdb_release_dates.csv` are refreshed. Set `TIER` in section 1.2 to analyse a
+  different tier.
 ```
