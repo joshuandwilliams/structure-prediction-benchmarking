@@ -20,7 +20,12 @@
 #   - Nextflow runtime bundled on the HPC (jdk-*/, nxf_home/) and per-run
 #     scratch (work/, .nextflow*, *_results/) under experiments/<target>/
 #   - SLURM logs (*.out, *.err)
-#   - Singularity images (*.img, *.sif) — multi-GB, HPC-side only
+#   - Singularity images (*.img, *.sif), multi-GB and HPC-side only
+#   - analysis/  The Quarto report is authored and rendered on the Mac from
+#     results pulled down by sync_from_hpc.sh.  Nothing on the HPC reads it,
+#     and its rendered .html plus the *_files/ JS/CSS bundle are gitignored
+#     build artefacts that do not belong on the cluster.  The plotting scripts
+#     the HPC does run live in bin/ and are still synced.
 #
 # The sync uses --delete, so files removed from the local repo are also
 # removed on the HPC.  Always run with --dry first when in doubt.
@@ -53,6 +58,7 @@ rsync -av --delete $DRY_RUN -e ssh \
     --exclude='*.img' \
     --exclude='*.sif' \
     --exclude='data/solved_NLR_structures/' \
+    --exclude='analysis/' \
     --exclude='work/' \
     --exclude='.nextflow*' \
     --exclude='*_results/' \

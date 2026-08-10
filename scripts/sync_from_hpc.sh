@@ -18,8 +18,16 @@
 #
 # Scope:
 #   Pulls experiments/<target>/ result trees only.  Source-tree code stays on
-#   the Mac as authoritative.  Nextflow scratch (work/, .nextflow*) is excluded
-#   — only the published *_results/ outputs come back.
+#   the Mac as authoritative.  Nextflow scratch (work/, .nextflow*) is
+#   excluded, so only the published *_results/ outputs come back.
+#
+#   SLURM job logs (*.out, *.err) ARE pulled deliberately.  They record what
+#   actually happened in each run and are the first thing to read when a
+#   benchmark fails.  They are gitignored, so they stay local and untracked.
+#
+# Safety:
+#   This script never passes --delete.  It can only add or update files on the
+#   Mac, never remove them.
 
 set -euo pipefail
 
@@ -64,26 +72,36 @@ if [ -n "${DRY_RUN}" ]; then
 fi
 
 # Resolve the list of targets to pull.
+#
+# Kept as a newline-delimited string rather than an array: macOS ships bash
+# 3.2, which has no `mapfile` and errors under `set -u` when an empty array is
+# expanded.  Target names are PDB-style IDs, so word-splitting is not a risk.
 if [ -n "${ALL}" ]; then
-    mapfile -t TARGETS < <(
+    # Ask for directories only, so stray files (README.md, _path_setup.py)
+    # are never mistaken for targets.
+    TARGET_LIST="$(
         ssh -q -o BatchMode=yes "${HPC_USER_HOST}" \
-            "ls -1 ${HPC_BASE}/experiments 2>/dev/null" \
-        | grep -vE '^(README|_path_setup)' || true
-    )
-    if [ ${#TARGETS[@]} -eq 0 ]; then
+            "cd ${HPC_BASE}/experiments 2>/dev/null && ls -1d */ 2>/dev/null" \
+        | sed 's#/$##' || true
+    )"
+    if [ -z "${TARGET_LIST}" ]; then
         echo "No targets found under ${HPC_BASE}/experiments on the HPC."
         exit 0
     fi
 else
-    TARGETS=("${TARGET}")
+    TARGET_LIST="${TARGET}"
 fi
 
-for t in "${TARGETS[@]}"; do
+# Read the target list on fd 3, and pass -n to the ssh probe below.  Both are
+# needed: commands inside the loop would otherwise consume the target list
+# from stdin, and only the first target would ever be synced.
+while IFS= read -r t <&3; do
+    [ -z "${t}" ] && continue
     REL="experiments/${t}"
     SRC="${HPC_USER_HOST}:${HPC_BASE}/${REL}/"
     DST="${REPO_ROOT}/${REL}/"
 
-    if ! ssh -q -o BatchMode=yes "${HPC_USER_HOST}" \
+    if ! ssh -n -q -o BatchMode=yes "${HPC_USER_HOST}" \
             "[ -d ${HPC_BASE}/${REL} ]" 2>/dev/null; then
         echo "[${t}] SKIP: no remote dir at ${HPC_BASE}/${REL}"
         continue
@@ -91,14 +109,18 @@ for t in "${TARGETS[@]}"; do
 
     mkdir -p "${DST}"
     echo "[${t}] rsync ${SRC} -> ${DST}"
-    rsync -av ${DRY_RUN} -e ssh \
+    # --no-perms/--no-owner/--no-group: the HPC filesystem reports every file
+    # as mode 755, so plain `rsync -a` would rewrite the mode of tracked
+    # inputs (params.yml, reference PDBs) and show them as modified in git
+    # with no content change.  Let the local umask decide instead.
+    rsync -av --no-perms --no-owner --no-group ${DRY_RUN} -e ssh \
         --exclude='.DS_Store' \
         --exclude='work/' \
         --exclude='.nextflow*' \
         --exclude='tmp/' \
         "${SRC}" "${DST}"
     echo ""
-done
+done 3<<< "${TARGET_LIST}"
 
 echo "Sync from HPC complete."
 if [ -n "${DRY_RUN}" ]; then
