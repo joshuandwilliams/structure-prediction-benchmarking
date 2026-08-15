@@ -81,6 +81,22 @@ Copy [`params_example.yml`](params_example.yml) (PDB mode) or
 starting point — each documents every parameter inline. Per-target runs
 live under [`experiments/`](experiments/README.md).
 
+## The analysis environment
+
+[`environment.yml`](environment.yml) pins the conda environment the Quarto
+analyses render in. Versions are exact so a re-render reproduces the
+committed figures.
+
+```bash
+mamba env create -f environment.yml
+mamba activate spb-analysis
+cd analysis/structure_prediction_benchmark && quarto render
+```
+
+It contains no structure predictor. Those live in the Singularity images
+built from [`containers/`](containers/README.md), and AlphaFold2-Multimer and
+AlphaFold 3 load from the HPC source-package system.
+
 ## Running the tests
 
 Two tiers, mirroring the development round-trip:
