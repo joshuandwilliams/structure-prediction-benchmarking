@@ -8,6 +8,15 @@ and build notes needed to recreate them.
 
 - [`Boltz1_Boltz2_Chai1.def`](Boltz1_Boltz2_Chai1.def) — builds the
   `benchmark_container` image (Boltz-1, Boltz-2, Chai-1 + the Python stack).
+- [`colabfold.def`](colabfold.def) — builds the `colabfold_container` image
+  (MMseqs2 + ColabFold with the AlphaFold2 extra, JAX on the CUDA 12 plugin).
+- [`esmfold2.def`](esmfold2.def) — builds the `esmfold2_container` image
+  (ESMFold2 on the ESMC-6B backbone, via the `esm` package and the Biohub
+  `transformers` fork).
+
+All three are copies of the definition files under
+`/hpc-home/jowillia/singularity/`, which is where the images are actually
+built. Keep them in step: edit on the HPC, then copy back here.
 
 ## Images the pipeline expects
 
@@ -41,12 +50,32 @@ load from the NBI HPC `source package` system via the `af2_package_id` /
 
 ## Building
 
-The image runs pre-flight URL checks, then downloads ~13 GB of model weights
-and pip packages, so it needs internet (build node) and ~30–45 min:
+Every definition file opens with pre-flight URL checks, so a moved weight URL
+aborts the build in seconds rather than after half an hour. All three then
+download model weights and pip packages, so they need a build node with
+internet access:
 
 ```bash
 cd /hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold
 singularity build --fakeroot Boltz1_Boltz2_Chai1.img Boltz1_Boltz2_Chai1.def
+
+cd /hpc-home/jowillia/singularity/ColabFold
+singularity build --fakeroot colabfold.img colabfold.def
+
+cd /hpc-home/jowillia/singularity/ESMFold2
+singularity build --fakeroot esmfold2.img esmfold2.def
 ```
 
-TODO: commit the ColabFold build def (`colabfold.def`) here too.
+Approximate build cost: ~13 GB of weights and 30–45 min for the benchmark
+image, ~27 GB and longer for ESMFold2 (ESMC-6B alone is ~25 GB).
+
+## Recording versions for a write-up
+
+The definition files pin only some versions explicitly (`chai_lab==0.6.1`,
+`torch==2.6.0`, `xformers==0.0.29.post3`); Boltz and ColabFold are installed
+unpinned, so the version that actually ran is a property of the built image.
+To read it back:
+
+```bash
+singularity exec <image>.img pip list --format=freeze
+```

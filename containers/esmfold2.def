@@ -1,0 +1,297 @@
+BootStrap: yum
+OSVersion: 9
+MirrorURL: http://yum-repos.hpccluster/AlmaLinux/9/os/$basearch/
+Include: yum
+
+# =============================================================================
+# esmfold2.img  —  ESMFold2 (CZ Biohub, released 27 May 2026)
+#
+# WHAT THIS IS (and is NOT)
+# -----------------------------------------------------------------------------
+# ESMFold2 is the NEW diffusion-based, all-atom *complex* predictor from the
+# Chan Zuckerberg Biohub (the ex-Meta / EvolutionaryScale ESM team).  It is
+# built on the ESMC-6B protein language model and predicts protein / DNA /
+# ligand complexes — competitive with AlphaFold3 on complexes per the report.
+# It is shipped in the same `esm` package (v3.x) that also contains ESM3/ESMC.
+#
+# It is NOT the original ESMFold (fair-esm / esmfold_v1 / facebook).  That one
+# lives in ../ESMFold/esmfold.def.
+#
+# ‼ VERIFY-BEFORE-BUILD (post-cutoff facts — confirm these resolve) ‼
+# -----------------------------------------------------------------------------
+# The org names below come from web research on 2026-06-08 (EvolutionaryScale's
+# repos/HF org reportedly migrated to "Biohub").  If any URL has moved, the
+# PRE-FLIGHT block aborts the build in seconds — just update the three *_REPO /
+# HF_* variables here and re-run.  Known candidates if "Biohub" is wrong:
+# evolutionaryscale/esm, czbiohub/esm; HF org biohub vs EvolutionaryScale.
+#   - Code:     https://github.com/Biohub/esm            (package name: esm, v3.3.0)
+#   - tfmrs:    https://github.com/Biohub/transformers   (custom fork — load-bearing)
+#   - Weights:  HF biohub/ESMFold2  (~1.4 GB) + biohub/ESMC-6B (~25 GB, pulled at load)
+#   - License:  MIT.   Python: 3.12 only (>=3.12,<3.13).   torch>=2.2.0.
+#
+# DISK/GPU: ~27 GB of weights bake into the image.  ESMC-6B is ~25 GB fp32, so
+# realistic inference needs a 40 GB+ GPU (A100-40G floor) — no official VRAM
+# figure was published, treat as a starting estimate.
+#
+# ACCELERATION: xformers (0.0.29.post3) IS installed — it provides the dominant
+# attention speedup for ESMC's 80-block stack and is confirmed ACTIVE on GPU.
+# flash-attn is DELIBERATELY NOT installed: the cu124 pip-torch 2.6.0 wheel's
+# C++ ABI did not match the prebuilt flash-attn wheels ("undefined symbol:
+# ...__cxx11...basic_string"), and ESMC imports flash_attn UNCONDITIONALLY when
+# the package is on disk — so a present-but-unloadable flash_attn CRASHED the
+# fold (regressed Test 4 from pass to fail). With flash-attn absent, ESMC falls
+# back gracefully (pure-PyTorch RoPE) and the fold works. flash-attn would only
+# add the rotary kernel on top of xformers. To re-attempt it, match the wheel
+# ABI to `torch._C._GLIBCXX_USE_CXX11_ABI` (see the note in %post).
+# =============================================================================
+
+%files
+
+%environment
+    export PATH=/usr/local/bin:$PATH
+    export NUMBA_CACHE_DIR=/tmp
+    export MPLCONFIGDIR=/tmp
+    export HF_HOME=/opt/hf_cache
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+
+%post
+    export NUMBA_CACHE_DIR=/tmp
+    export MPLCONFIGDIR=/tmp
+    export HF_HOME=/opt/hf_cache
+
+    # -------------------------------------------------------------------------
+    # Edit these if a pre-flight check below fails (URLs moved post-release).
+    # -------------------------------------------------------------------------
+    ESM_GIT="git+https://github.com/Biohub/esm.git@main"
+    ESM_REPO_URL="https://github.com/Biohub/esm"
+    HF_FOLD_REPO="biohub/ESMFold2"
+    HF_LM_REPO="biohub/ESMC-6B"
+
+    # Accelerated kernel for the ESMC-6B backbone (the 80-block attention stack):
+    # xformers 0.0.29.post3 — pins torch==2.6.0, so it can't drift our torch.
+    # This is the dominant speedup and is confirmed ACTIVE in the GPU test.
+    XFORMERS_PIN="xformers==0.0.29.post3"
+    #
+    # flash-attn is DELIBERATELY NOT installed. The prebuilt wheels mismatched
+    # the cu124 pip-torch C++ ABI ("undefined symbol: ...__cxx11...basic_string"),
+    # and ESMC imports flash_attn UNCONDITIONALLY when the package is on disk —
+    # so a present-but-unloadable flash_attn CRASHES the fold (it broke Test 4).
+    # flash-attn would only add the rotary kernel on top of xformers anyway.
+    # If you want to try it: in the built container run
+    #   python -c "import torch; print(torch._C._GLIBCXX_USE_CXX11_ABI)"
+    # then install the wheel whose ABI MATCHES (True -> ...cxx11abiTRUE...,
+    # False -> ...abiFALSE...), e.g.:
+    #   https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/flash_attn-2.8.1+cu12torch2.6cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+    # transformer_engine is also skipped (heavy build; negligible numeric gain).
+
+    yum install -y wget ca-certificates 2>/dev/null || yum install -y wget 2>/dev/null
+
+    # =========================================================================
+    # PRE-FLIGHT URL CHECKS  (abort fast if the post-release URLs drifted)
+    # =========================================================================
+    echo ""
+    echo "=== PRE-FLIGHT URL CHECKS ==="
+    URL_FAIL=0
+    # --spider HEAD (follows redirects, no Range header): the byte-range trick
+    # is unreliable against HuggingFace (non-LFS files reject it; LFS redirects
+    # to a CDN). --spider just confirms the URL resolves.
+    check_url() {
+        local label="$1"; local url="$2"
+        if wget -q --spider --timeout=15 --tries=2 --no-check-certificate "$url" 2>/dev/null; then
+            echo "  OK   $label"
+        else
+            echo "  FAIL $label"; echo "       $url"; URL_FAIL=$((URL_FAIL + 1))
+        fi
+    }
+
+    check_url "Python 3.12.7 source" \
+        "https://www.python.org/ftp/python/3.12.7/Python-3.12.7.tgz"
+    check_url "PyPI index" "https://pypi.org/simple/"
+    check_url "PyTorch cu124 index" "https://download.pytorch.org/whl/cu124/"
+    check_url "esm code repo ($ESM_REPO_URL)" "$ESM_REPO_URL"
+    check_url "ESMFold2 weights repo (HF)" \
+        "https://huggingface.co/$HF_FOLD_REPO/resolve/main/config.json"
+    check_url "ESMC-6B backbone repo (HF)" \
+        "https://huggingface.co/$HF_LM_REPO/resolve/main/config.json"
+
+    echo ""
+    if [ $URL_FAIL -gt 0 ]; then
+        echo "PRE-FLIGHT FAILED: $URL_FAIL URL(s) unreachable."
+        echo "ESMFold2 is a fresh release — update the ESM_GIT / HF_*_REPO vars"
+        echo "at the top of %post to the current locations, then rebuild."
+        exit 1
+    fi
+    echo "All URLs verified. Proceeding with build."
+    echo ""
+
+    # =========================================================================
+    # System dependencies
+    # =========================================================================
+    yum update -y
+    yum install -y openssl-devel bzip2-devel libffi-devel epel-release binutils wget
+    yum install -y git unzip tar gzip bzip2 which zlib-devel sqlite-devel
+    yum groupinstall -y "Development Tools"
+
+    # =========================================================================
+    # Install Python 3.12  (esm requires >=3.12,<3.13 — 3.12 ONLY)
+    # =========================================================================
+    wget https://www.python.org/ftp/python/3.12.7/Python-3.12.7.tgz
+    tar -xzf Python-3.12.7.tgz
+    cd Python-3.12.7
+    ./configure --enable-optimizations
+    make altinstall
+    cd /
+    rm -rf Python-3.12.7 Python-3.12.7.tgz
+
+    rm -f /usr/bin/python
+    ln -s /usr/local/bin/python3.12 /usr/bin/python
+    ln -s /usr/local/bin/pip3.12 /usr/bin/pip
+
+    python -V
+    pip install --upgrade setuptools pip
+
+    # =========================================================================
+    # PyTorch (CUDA 12.4).  esm floor is torch>=2.2.0; 2.6.0 matches the rest
+    # of the pipeline's containers.
+    # =========================================================================
+    # NB: if `import` later fails with "module 'torch' has no attribute
+    # 'float8_e8m0fnu'" (or similar), the Biohub transformers fork needs
+    # torch>=2.7 — bump this pin and switch to a CUDA index that ships it
+    # (torch 2.7 dropped cu124; use cu126 or cu128).
+    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+
+    # =========================================================================
+    # Install ESMFold2.
+    #
+    # `esm` declares its own dependency on the CUSTOM transformers fork
+    # (transformers @ git+https://github.com/Biohub/transformers.git@main),
+    # which is where the ESMFold2 / ESMC model classes live — stock PyPI
+    # transformers will NOT have them.  We install esm from git (@main = v3.3.0)
+    # per the README; PyPI `esm` (3.2.3) lags and may predate ESMFold2.
+    # huggingface_hub[cli] is for pre-staging weights below.
+    # =========================================================================
+    echo ""
+    echo "=== Installing ESMFold2 (esm @ git, pulls Biohub/transformers fork) ==="
+    pip install "huggingface_hub[cli]"
+    pip install "esm@${ESM_GIT}"
+
+    # Confirm the custom transformers fork (not stock PyPI) provides the model.
+    python -c "import transformers; print('transformers:', transformers.__version__, transformers.__file__)"
+
+    # =========================================================================
+    # Accelerated kernels for the ESMC-6B backbone (optional, recommended).
+    # Best-effort: WARN, never fail — a moved wheel must not break the build,
+    # and ESMC runs fine (just slower) on the pure-PyTorch fallback.
+    # =========================================================================
+    echo ""
+    echo "=== Installing accelerated kernel (xformers, best-effort) ==="
+    pip install "$XFORMERS_PIN" \
+        && echo "  xformers OK" \
+        || echo "  WARN: xformers install failed — ESMC uses F.scaled_dot_product_attention"
+    # flash-attn intentionally NOT installed — see the note at the top of %post:
+    # the ABI-mismatched wheel crashed the fold, and ESMC uses it unconditionally
+    # if present. xformers above is the main speedup.
+
+    # =========================================================================
+    # Pre-download weights into the baked-in HF cache (air-gapped compute).
+    #   biohub/ESMFold2   ~1.4 GB  (folding head: model.safetensors + ccd.pkl)
+    #   biohub/ESMC-6B    ~25 GB   (6-shard LM backbone, pulled at model load)
+    # Both are open (gated=false) per the model cards — no HF token needed.
+    # =========================================================================
+    echo ""
+    echo "=== Downloading ESMFold2 + ESMC-6B weights (~27 GB) into $HF_HOME ==="
+    mkdir -p "$HF_HOME"
+    # huggingface_hub Python API, not the CLI: `huggingface-cli` was removed
+    # (renamed to `hf`) and now errors out. snapshot_download is stable.
+    python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='$HF_FOLD_REPO', repo_type='model', cache_dir='$HF_HOME/hub')"
+    python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='$HF_LM_REPO', repo_type='model', cache_dir='$HF_HOME/hub')"
+
+    # =========================================================================
+    # Permissions
+    # =========================================================================
+    cd /usr/local/lib/
+    chmod 755 python3.12
+    chmod 755 python3.12/site-packages
+    cd /usr/local/lib/python3.12/site-packages/
+    find . -mount -type d -exec chmod 755 {} \;
+    find . -mount -type f -exec chmod 775 {} \;
+    chmod -R a+rX /opt/hf_cache
+
+    # =========================================================================
+    # FINAL VERIFICATION
+    # =========================================================================
+    echo ""
+    echo "=== FINAL VERIFICATION ==="
+    MISSING=0
+
+    echo "--- Python & PyTorch ---"
+    python -c "import sys; print(f'Python: {sys.version}')"
+    case "$(python -c 'import sys;print(f"{sys.version_info.major}.{sys.version_info.minor}")')" in
+        3.12) echo "  PASS: Python 3.12" ;;
+        *) echo "  FAIL: esm needs Python 3.12"; MISSING=$((MISSING + 1)) ;;
+    esac
+    python -c "import torch; print(f'PyTorch: {torch.__version__} (CUDA {torch.version.cuda})')" \
+        || { echo "FAIL: torch"; MISSING=$((MISSING + 1)); }
+
+    echo ""
+    echo "--- ESMFold2 imports ---"
+    python -c "import esm; print('  PASS: esm import OK')" \
+        || { echo "  FAIL: esm import"; MISSING=$((MISSING + 1)); }
+    # The ESMFold2 model class lives in the custom Biohub transformers fork.
+    # Importing modeling_esmfold2 triggers a @triton.autotune decorator on its
+    # fused attention kernel AT IMPORT TIME, which needs an ACTIVE CUDA DRIVER —
+    # so on this GPU-less build node it raises "0 active drivers". That's
+    # expected (it imports fine on a GPU node, as the test script confirms).
+    # So: hard-check that the fork is INSTALLED (module on disk), and treat the
+    # live import as INFO, exercised at runtime — same pattern as the Boltz
+    # container's GPU-gated kernel imports.
+    python -c "import os, transformers; p=os.path.join(os.path.dirname(transformers.__file__),'models','esmfold2','modeling_esmfold2.py'); assert os.path.exists(p), 'esmfold2 module not found'; print('  PASS: Biohub transformers fork present (esmfold2 module on disk)')" \
+        || { echo "  FAIL: ESMFold2 module missing — Biohub transformers fork not installed"; MISSING=$((MISSING + 1)); }
+    python -c "from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model; print('  PASS: ESMFold2Model fully importable')" 2>/dev/null \
+        || echo "  INFO: ESMFold2Model live import needs a GPU (Triton kernel autotune) — exercised at runtime, not on this build node"
+    python -c "from esm.models.esmfold2 import ProteinInput, StructurePredictionInput, ESMFold2InputBuilder; print('  PASS: esm.models.esmfold2 input API')" \
+        || { echo "  FAIL: esm.models.esmfold2 input API"; MISSING=$((MISSING + 1)); }
+
+    echo ""
+    echo "--- Accelerated kernels (optional; ESMC speed) ---"
+    python -c "import xformers; print('  xformers:', xformers.__version__)" 2>/dev/null \
+        || echo "  INFO: xformers absent — ESMC uses default attention (slower)"
+    python -c "import flash_attn; print('  WARN: flash-attn present — verify it actually imports, or the fold will crash')" 2>/dev/null \
+        || echo "  INFO: flash-attn intentionally absent (ABI mismatch crashed the fold) — ESMC uses pure-PyTorch RoPE"
+
+    echo ""
+    echo "--- Weight files (baked cache) ---"
+    # -L follows HF cache symlinks (snapshots/.../*.safetensors) to the sha-named
+    # blobs so -size measures the real files, not the tiny links.
+    if find -L /opt/hf_cache -path "*ESMFold2*" -name "*.safetensors" -size +100M 2>/dev/null | grep -q .; then
+        echo "  PASS: ESMFold2 head weights present"
+    else
+        echo "  FAIL: ESMFold2 head weights missing"; MISSING=$((MISSING + 1))
+    fi
+    if find -L /opt/hf_cache -path "*ESMC-6B*" -name "*.safetensors" 2>/dev/null | grep -q .; then
+        echo "  PASS: ESMC-6B backbone shards present ($(du -sh /opt/hf_cache | cut -f1) total cache)"
+    else
+        echo "  FAIL: ESMC-6B backbone missing"; MISSING=$((MISSING + 1))
+    fi
+
+    echo ""
+    if [ $MISSING -gt 0 ]; then
+        echo "BUILD ABORTED: $MISSING critical component(s) missing."
+        exit 1
+    fi
+    echo "=== All checks passed — ESMFold2 container ready ==="
+    echo ""
+    echo "Usage (single-sequence fold; needs --nv and a 40 GB+ GPU):"
+    echo "  singularity exec --nv esmfold2.img python -c '"
+    echo "from esm.models.esmfold2 import ProteinInput, StructurePredictionInput, ESMFold2InputBuilder"
+    echo "from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model"
+    echo "m = ESMFold2Model.from_pretrained(\"$HF_FOLD_REPO\").cuda().eval()"
+    echo "spi = StructurePredictionInput(sequences=[ProteinInput(id=\"A\", sequence=\"MALWMRLL...\")])"
+    echo "r = ESMFold2InputBuilder().fold(m, spi, num_loops=20, num_sampling_steps=100, num_diffusion_samples=1, seed=0)"
+    echo "open(\"pred.cif\",\"w\").write(r.complex.to_mmcif())'"
+    echo ""
+    echo "Notes:"
+    echo "  - Predicts protein/DNA/ligand COMPLEXES; pass one ProteinInput for monomers."
+    echo "  - biohub/ESMFold2-Fast exists for faster diffusion sampling (swap HF_FOLD_REPO)."
+    echo "  - All loads are offline from /opt/hf_cache (HF_HUB_OFFLINE=1)."

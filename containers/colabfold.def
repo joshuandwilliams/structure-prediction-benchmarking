@@ -1,0 +1,279 @@
+BootStrap: yum
+OSVersion: 9
+MirrorURL: http://yum-repos.hpccluster/AlmaLinux/9/os/$basearch/
+Include: yum
+
+%files
+
+%environment
+    export PATH=/opt/mmseqs/bin:/usr/local/bin:$PATH
+    export NUMBA_CACHE_DIR=/tmp
+    export MPLCONFIGDIR=/tmp
+    # ColabFold looks for weights in $XDG_CACHE_HOME/colabfold or ~/.cache/colabfold
+    # Override to the pre-cached location inside the container
+    export XDG_CACHE_HOME=/opt/colabfold_cache
+    # JAX CUDA plugin discovery — required for jax[cuda12] plugin model (JAX >= 0.4.26)
+    export JAX_PLATFORMS=cuda,cpu
+    export XLA_PYTHON_CLIENT_PREALLOCATE=false
+
+%post
+    export NUMBA_CACHE_DIR=/tmp
+    export MPLCONFIGDIR=/tmp
+
+    # Bootstrap: wget + CA certs for pre-flight checks
+    yum install -y wget ca-certificates 2>/dev/null || yum install -y wget 2>/dev/null
+
+    # =========================================================================
+    # PRE-FLIGHT URL CHECKS
+    # =========================================================================
+    echo ""
+    echo "=== PRE-FLIGHT URL CHECKS ==="
+
+    URL_FAIL=0
+
+    check_url() {
+        local label="$1"
+        local url="$2"
+        if wget --timeout=15 --tries=2 --no-check-certificate \
+                --header="Range: bytes=0-0" \
+                -O /dev/null "$url" 2>/dev/null; then
+            echo "  OK   $label"
+        else
+            echo "  FAIL $label"
+            echo "       $url"
+            URL_FAIL=$((URL_FAIL + 1))
+        fi
+    }
+
+    check_url "Python 3.11.9 source" \
+        "https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz"
+    check_url "PyPI index" \
+        "https://pypi.org/simple/"
+    check_url "PyTorch cu124 index" \
+        "https://download.pytorch.org/whl/cu124/"
+    check_url "MMseqs2 binary" \
+        "https://mmseqs.com/latest/mmseqs-linux-avx2.tar.gz"
+    check_url "NVIDIA CUDA toolkit repo (JAX CUDA plugin)" \
+        "https://pypi.org/simple/jax-cuda12-plugin/"
+
+    echo ""
+    if [ $URL_FAIL -gt 0 ]; then
+        echo "PRE-FLIGHT FAILED: $URL_FAIL URL(s) unreachable. Aborting."
+        exit 1
+    fi
+    echo "All URLs verified. Proceeding with build."
+    echo ""
+
+    # =========================================================================
+    # System dependencies
+    # =========================================================================
+    yum update -y
+    yum install -y openssl-devel bzip2-devel libffi-devel epel-release binutils wget
+    yum install -y git unzip tar gzip bzip2 which zlib-devel
+    yum groupinstall -y "Development Tools"
+
+    # =========================================================================
+    # Install Python 3.11
+    # =========================================================================
+    wget https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz
+    tar -xzf Python-3.11.9.tgz
+    cd Python-3.11.9
+    ./configure --enable-optimizations
+    make altinstall
+    cd /
+    rm -rf Python-3.11.9 Python-3.11.9.tgz
+
+    rm -f /usr/bin/python
+    ln -s /usr/local/bin/python3.11 /usr/bin/python
+    ln -s /usr/local/bin/pip3.11 /usr/bin/pip
+
+    python -V
+    pip install --upgrade setuptools pip
+
+    # =========================================================================
+    # Install PyTorch with CUDA 12.4
+    # =========================================================================
+    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+
+    # =========================================================================
+    # Install MMseqs2
+    # =========================================================================
+    echo ""
+    echo "=== Installing MMseqs2 ==="
+    cd /opt
+    wget https://mmseqs.com/latest/mmseqs-linux-avx2.tar.gz
+    tar xzf mmseqs-linux-avx2.tar.gz
+    ln -s /opt/mmseqs/bin/mmseqs /usr/local/bin/mmseqs
+    rm mmseqs-linux-avx2.tar.gz
+    mmseqs version
+
+    # =========================================================================
+    # Install ColabFold
+    #
+    # colabfold[alphafold] installs:
+    #   - colabfold_search  (MMseqs2 search wrapper)
+    #   - colabfold_batch   (AlphaFold2 prediction with pre-computed MSAs)
+    #   - AlphaFold2 model code (via alphafold-colabfold fork)
+    #   - JAX (CPU-only build — overridden below with CUDA variant)
+    # =========================================================================
+    echo ""
+    echo "=== Installing ColabFold ==="
+
+    # Install ColabFold with AlphaFold support.
+    # This pulls in jax + jaxlib from PyPI, which are CPU-only wheels.
+    pip install "colabfold[alphafold]"
+
+    # =========================================================================
+    # Upgrade JAX to CUDA 12 variant
+    #
+    # colabfold[alphafold] pins jax>=0.5.2,<0.6.0 and pulls the CPU-only
+    # jaxlib wheel from PyPI. Since JAX 0.4.26+, GPU support ships via a
+    # separate plugin model: jax[cuda12] installs jax-cuda12-plugin and
+    # jax-cuda12-pjrt, which bundle the CUDA 12 XLA backend. We reinstall
+    # the matching version here with the cuda12 extra, which replaces the
+    # CPU jaxlib with the CUDA-capable equivalent and adds the plugin
+    # packages. No CUDA toolkit needs to be present at build time — the
+    # plugin discovers the host CUDA runtime (libcuda.so) at container
+    # launch via --nv / --nvccli.
+    # =========================================================================
+    echo ""
+    echo "=== Upgrading JAX to CUDA 12 plugin build ==="
+
+    # Capture the jax version colabfold actually installed
+    JAX_VER=$(python -c "import jax; print(jax.__version__)")
+    echo "  ColabFold installed JAX ${JAX_VER} (CPU). Reinstalling with cuda12 extra..."
+
+    pip install --upgrade "jax[cuda12]==${JAX_VER}"
+
+    # Verify the CUDA plugin packages landed
+    python -c "import jax_cuda12_plugin; print('  jax-cuda12-plugin import OK')" \
+        || { echo "  FAIL: jax-cuda12-plugin not found after reinstall"; exit 1; }
+    echo "  JAX CUDA 12 plugin installed successfully."
+
+    # Verify CLIs are available
+    which colabfold_search || { echo "FAIL: colabfold_search not found"; exit 1; }
+    which colabfold_batch  || { echo "FAIL: colabfold_batch not found"; exit 1; }
+
+    # =========================================================================
+    # Pre-download AlphaFold2 model weights
+    #
+    # ColabFold provides `python -m colabfold.download` which downloads
+    # all required AlphaFold2 params into $XDG_CACHE_HOME/colabfold/params.
+    # Pre-caching here so air-gapped compute nodes don't need internet.
+    # =========================================================================
+    echo ""
+    echo "=== Pre-downloading AlphaFold2 weights ==="
+
+    export XDG_CACHE_HOME=/opt/colabfold_cache
+    mkdir -p "${XDG_CACHE_HOME}"
+
+    python -m colabfold.download
+
+    echo ""
+    echo "Weight cache contents:"
+    find /opt/colabfold_cache -type f -name "*.npz" -o -name "*.params" | head -20
+    du -sh /opt/colabfold_cache/
+
+    # =========================================================================
+    # Fix permissions
+    # =========================================================================
+    cd /usr/local/lib/
+    chmod 755 python3.11
+    chmod 755 python3.11/site-packages
+    cd /usr/local/lib/python3.11/site-packages/
+    find . -mount -type d -exec chmod 755 {} \;
+    find . -mount -type f -exec chmod 775 {} \;
+
+    chmod -R a+rX /opt/colabfold_cache
+    chmod -R a+rX /opt/mmseqs
+
+    # =========================================================================
+    # FINAL VERIFICATION
+    # =========================================================================
+    echo ""
+    echo "=== FINAL VERIFICATION ==="
+
+    MISSING=0
+
+    echo "--- Python & PyTorch ---"
+    python -c "import sys; print(f'Python: {sys.version}')"
+    python -c "import torch; print(f'PyTorch: {torch.__version__}')" \
+        || { echo "FAIL: torch"; MISSING=$((MISSING + 1)); }
+    python -c "import torch; print(f'CUDA build: {torch.version.cuda}')"
+
+    echo ""
+    echo "--- JAX ---"
+    python -c "import jax; print(f'JAX: {jax.__version__}')" \
+        || { echo "FAIL: jax"; MISSING=$((MISSING + 1)); }
+    # Verify the CUDA plugin is present (GPU discovery happens at runtime via --nv)
+    python -c "import jax_cuda12_plugin; print('  jax-cuda12-plugin: present')" \
+        || { echo "  WARN: jax-cuda12-plugin not found — GPU will NOT be used"; MISSING=$((MISSING + 1)); }
+    python -c "
+import jax
+# At build time there is no GPU, so we just confirm cuda12 is a known backend
+backends = []
+try:
+    from jax._src.xla_bridge import backends as _b
+    backends = list(_b().keys())
+except Exception:
+    pass
+print(f'  JAX backends visible at build time: {backends or \"[none — expected, no GPU at build]\"}')
+"
+
+    echo ""
+    echo "--- ColabFold ---"
+    # colabfold module doesn't expose __version__; test import + CLI instead
+    python -c "import colabfold; print('  ColabFold import OK')" \
+        || { echo "  FAIL: colabfold import"; MISSING=$((MISSING + 1)); }
+    python -c "from importlib.metadata import version; print(f'  ColabFold version: {version(\"colabfold\")}')" \
+        || echo "  INFO: version metadata not available (non-critical)"
+    colabfold_search --help > /dev/null 2>&1 \
+        && echo "  PASS: colabfold_search CLI" \
+        || { echo "  FAIL: colabfold_search CLI"; MISSING=$((MISSING + 1)); }
+    colabfold_batch --help > /dev/null 2>&1 \
+        && echo "  PASS: colabfold_batch CLI" \
+        || { echo "  FAIL: colabfold_batch CLI"; MISSING=$((MISSING + 1)); }
+
+    echo ""
+    echo "--- MMseqs2 ---"
+    mmseqs version \
+        && echo "  PASS: mmseqs" \
+        || { echo "  FAIL: mmseqs"; MISSING=$((MISSING + 1)); }
+
+    echo ""
+    echo "--- Weight cache ---"
+    PARAMS_DIR="/opt/colabfold_cache/colabfold/params"
+    if [ -d "$PARAMS_DIR" ] && [ "$(ls -A $PARAMS_DIR 2>/dev/null)" ]; then
+        NPARAMS=$(ls "$PARAMS_DIR"/*.npz 2>/dev/null | wc -l)
+        echo "  PASS: $NPARAMS parameter files in $PARAMS_DIR"
+        echo "  Total cache size: $(du -sh /opt/colabfold_cache | cut -f1)"
+    else
+        echo "  FAIL: No parameter files found in $PARAMS_DIR"
+        echo "  WARNING: colabfold_batch will attempt to download on first run."
+        echo "  This will fail on air-gapped compute nodes!"
+        MISSING=$((MISSING + 1))
+    fi
+
+    echo ""
+    if [ $MISSING -gt 0 ]; then
+        echo "BUILD ABORTED: $MISSING critical component(s) missing."
+        exit 1
+    fi
+
+    echo "=== All checks passed — ColabFold container ready ==="
+    echo ""
+    echo "Usage:"
+    echo "  # Step 1: Generate MSAs with local MMseqs2 databases"
+    echo "  singularity exec colabfold.img colabfold_search \\"
+    echo "    --mmseqs mmseqs --use-env 1 --use-templates 0 \\"
+    echo "    input.fasta /path/to/colabfold_databases msas/"
+    echo ""
+    echo "  # Step 2: Predict structures from pre-computed MSAs"
+    echo "  singularity exec --nv colabfold.img colabfold_batch \\"
+    echo "    msas/ predictions/ --model-type alphafold2_multimer_v3"
+    echo ""
+    echo "Notes:"
+    echo "  - ColabFold databases expected at /nbi/Reference-Data/AlphaFold/colabfold_databases"
+    echo "  - MSA search (Step 1) is CPU-only, needs ~128 GB RAM"
+    echo "  - Prediction (Step 2) needs GPU"
+
