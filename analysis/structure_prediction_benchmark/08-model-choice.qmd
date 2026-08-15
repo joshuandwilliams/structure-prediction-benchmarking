@@ -1,0 +1,111 @@
+---
+title: "8. Which model should a no-MSA design pipeline use?"
+format:
+  html:
+    code-fold: true
+    toc: true
+    embed-resources: true
+jupyter: python3
+---
+
+**Objective.** Pull analyses 1–7 together into a single recommendation for a
+design setting where no MSA is available.
+
+**Why no MSA.** A resurfacing campaign generates sequences that do not exist in
+nature. There is no meaningful multiple sequence alignment for a designed HMA
+variant, so the MSA columns of the earlier analyses are informative about the
+models but not available in the intended application.
+
+```{python}
+import sys
+sys.path.insert(0, ".")
+from _common import *
+
+d = load(verbose=False)
+df, pred, rt, near, lookup = d["df"], d["pred"], d["rt"], d["near"], d["lookup"]
+iface = pd.read_csv(SUPP_FIGDIR / "wrong-interface" / "predicted_interfaces_plddt.csv")
+```
+
+## Everything on one page
+
+```{python}
+rows = []
+for (m, f), g in df.groupby(["model", "msa"]):
+    if f != "no_msa" or is_oracle(m):
+        continue          # reference-restrained runs are not predictors
+    acc = g[RA_COL] < RA_EFF_THRESHOLD
+
+    sel = []
+    for pdb, gp in pred[(pred["model"] == m) & (pred["msa"] == f)].groupby("pdb"):
+        gp = gp.dropna(subset=["plddt"])
+        if len(gp):
+            sel.append({"oracle": gp[RA_COL].min() < RA_EFF_THRESHOLD,
+                        "plddt": gp.loc[gp["plddt"].idxmax(), RA_COL] < RA_EFF_THRESHOLD})
+    sel = pd.DataFrame(sel)
+
+    n = fl = 0
+    for _, r in near.iterrows():
+        A, B = lookup.get((m, f, r["pdb_a"])), lookup.get((m, f, r["pdb_b"]))
+        if A is None or B is None:
+            continue
+        n += 1
+        fl += ((A[RA_COL] < RA_EFF_THRESHOLD) != (B[RA_COL] < RA_EFF_THRESHOLD))
+    p_ = float(acc.mean())
+
+    ifc = iface[(iface["model"] == m) & (iface["msa"] == f) & (iface["pdb"] != "6Q76")]
+    r_ = rt[(rt["model"] == m) & (rt["msa"] == f)]
+
+    rows.append({
+        "model": DISPLAY.get(m, m),
+        "correct /18 (oracle)": int(acc.sum()),
+        "selected by pLDDT": f"{100 * sel['plddt'].mean():.0f}%",
+        "consistency": round(2 * p_ * (1 - p_) * n - fl, 1),
+        "correct site /13": int((ifc["site"] == "correct site").sum()),
+        "AVR-Pia site /13": int((ifc["site"] == "AVR-Pia site").sum()),
+        "min/run": round(float(r_["elapsed_min"].median()), 1),
+        "peak GB": round(float(r_["peak_rss_gb"].median()), 1),
+    })
+pd.DataFrame(rows).sort_values("correct /18 (oracle)", ascending=False).reset_index(drop=True)
+```
+
+Column sources: accuracy from [analysis 1](01-pose-accuracy.html), selection from
+[3](03-prediction-selection.html), consistency from
+[4](04-robustness.html), interface from [6](06-failure-interface.html), cost from
+[7](07-compute-cost.html).
+
+## What the benchmark says, plainly
+
+**AlphaFold3 and ESMFold2 are the strongest no-MSA models here.** Both pose 11 of
+18 correctly, both retain about 56% after realistic pLDDT-based selection, both
+put 10 of 13 effectors on the correct surface, and AlphaFold3 is the fastest
+model in the panel.
+
+**Boltz-2's weakness is in selection, not generation.** Its oracle accuracy is
+respectable, but the drop from oracle to pLDDT-selected is the largest of any
+credible model: it produces good poses and then fails to recognise them. Combined
+with most of its unprompted picks landing on the AVR-Pia surface, its
+out-of-the-box output is the weakest of the serious contenders.
+
+**Boltz-2 wins on two axes.** Self-consistency across near-identical inputs,
+which is the property a resurfacing campaign depends on most, and memory
+footprint. Neither outweighs the accuracy gap on its own.
+
+**None of this is a large-sample result.** Eighteen complexes from one protein
+family, and several of these margins are a handful of targets. See the caveats in
+each source analysis.
+
+**The constrained variants are deliberately absent from this table.** Their
+restraints come from the reference complex, so they cannot be run on a novel
+target and do not belong in a ranking of predictors. They matter for a different
+reason, below.
+
+## Boltz-2 is highly steerable, and that is the point
+
+Given contact and pocket restraints derived from the true interface, Boltz-2
+reaches **14 of 18 at a median 1.8 Å**, against 9 of 18 and 6.9 Å unrestrained.
+Boltz-1 given the same treatment improves only from 8 to 9 of 18.
+
+This is a positive control, not a result about prediction. What it establishes
+is that **Boltz-2 responds to being told where the interface is**, which is the
+premise any steering method depends on and is far from guaranteed — Boltz-1
+barely moves on the same information (8 to 9 of 18).

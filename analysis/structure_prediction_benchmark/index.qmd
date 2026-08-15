@@ -1,0 +1,80 @@
+---
+title: "Structure-prediction benchmark: analysis index"
+format:
+  html:
+    toc: false
+    embed-resources: true
+jupyter: python3
+---
+
+Benchmark of protein complex predictors on solved plant immune complexes. The
+analysis is split by objective; each document is self-contained and reads the
+same committed CSVs via `_common.py`.
+
+**Scope throughout.** Tier 1 of the manifest: the 18 small HMA /
+integrated-domain : effector complexes (Pik and RGA5), the only fully
+benchmarked tier. Scoring is `ra_eff`, the receptor-aligned effector RMSD, with
+< 5 Å counting as a correct pose.
+
+| | Analysis | Objective |
+|---|---|---|
+| 1 | [Pose accuracy](01-pose-accuracy.html) | How accurately does each model pose the effector, and which targets are hard? |
+| 2 | [Confidence reliability](02-confidence-reliability.html) | Can a model's own confidence tell you the pose is right, and where should a cutoff sit? |
+| 3 | [Prediction selection](03-prediction-selection.html) | Which of the 25 predictions should the pipeline keep, without using the answer? |
+| 4 | [Robustness](04-robustness.html) | Are models self-consistent across near-identical complexes? |
+| 5 | [Training exposure](05-training-exposure.html) | How much of the benchmark could each model have seen, and can leakage be tested? |
+| 6 | [Failure interface](06-failure-interface.html) | Where do the wrong poses actually go? |
+| 7 | [Compute cost](07-compute-cost.html) | What does each model cost in time and memory? |
+| 8 | [Model choice](08-model-choice.html) | **Synthesis:** which model should a no-MSA design pipeline use? |
+| 9 | [Reference similarity](09-reference-similarity.html) | How similar are the 18 reference complexes to each other, in sequence and in fold? |
+| 10 | [Effector pose geometry](10-effector-pose-geometry.html) | Which HMA residues does each effector contact, in one common frame? |
+
+## Where the figures go
+
+- `thesis-figures/` holds only the figures that appear in the thesis chapter.
+  Nothing else belongs there, so the directory can be diffed against the
+  chapter to check they are in step.
+- `supplementary-figures/` holds everything else. Two subdirectories group the
+  large per-combination families, `confidence-vs-pose/` and `wrong-interface/`;
+  every other figure sits at the top level.
+
+## Which structure does each analysis describe?
+
+Every combo runs 25 predictions per target, so "the" structure for a model is
+whichever one you select. Two selections are used here and **they are different
+molecules**, so counts must not be compared across the divide:
+
+| Selection | Used by | Reference needed? |
+|---|---|---|
+| **Best of 25 by RMSD** (oracle) | analyses 1, 4, 8 — via `combined_metrics.csv` | yes |
+| **Highest average pLDDT** (what the pipeline publishes) | analysis 6, and the selection comparison in 3 | no |
+| **All 25** | analyses 2, 3 — via `per_prediction_metrics.csv` | n/a |
+
+Analysis 3 exists precisely to quantify the gap between the first two. Analysis 6
+recomputes RMSD on the structure it classifies (`ra_eff_this_structure`) so its
+site calls and RMSDs always describe the same molecule.
+
+## Data
+
+Committed alongside these documents, so everything renders without HPC access:
+
+- `combined_metrics.csv` — best prediction per (model, MSA, target) by RMSD
+- `per_prediction_metrics.csv` — all 25 predictions per combo
+- `runtime_stats.csv` — wall-clock and memory from the Nextflow trace
+- `reference_similarity.csv` — pairwise sequence identity between references
+- `pdb_release_dates.csv` — for training-cutoff comparisons
+- `supplementary-figures/wrong-interface/*.csv` — interface classification
+
+Regenerate with `bin/build_per_prediction_csv.py`, `bin/build_runtime_csv.py`,
+`bin/compute_reference_similarity.py` and `bin/classify_predicted_interface.py`.
+
+## Two exclusions applied throughout
+
+- **Boltz-2 (constrained)** is dropped. Its 450 predicted structures are byte
+  identical to unconstrained Boltz-2 across all 18 targets despite a genuinely
+  different input carrying contact restraints. Boltz-1's constrained variant does
+  differ, so this is specific to Boltz-2. Nothing can be concluded about Boltz-2
+  contact constraints until it is re-run.
+- **Chai-1's PAE-derived metrics** (ipSAE, ipae, mean PAE) are blanked. Chai-1
+  v0.6.x emits no PAE matrix, so they are uncomputable, but `compute_metrics.py`
+  writes `0.0` rather than a blank, which reads as a genuine minimum score.

@@ -1,0 +1,132 @@
+---
+title: "5. Can training-set leakage be assessed on this benchmark?"
+format:
+  html:
+    code-fold: true
+    toc: true
+    embed-resources: true
+jupyter: python3
+---
+
+**Objective.** Quantify how many benchmark structures each model could have seen
+during training, and establish whether that exposure can be shown to affect
+performance.
+
+**Conclusion up front: it cannot, on this tier.** Exposure is confounded with
+interface biology by construction. This document records the exposure counts,
+which are worth reporting, and shows why the obvious tests fail.
+
+```{python}
+import sys
+sys.path.insert(0, ".")
+from _common import *
+
+d = load()
+df, near, lookup, rel = d["df"], d["near"], d["lookup"], d["rel"]
+N = len(rel)
+```
+
+## Exposure
+
+A structure counts as exposed when its PDB **initial release date** is on or
+before that model's published training cutoff (release date, not deposition
+date, since the AF/Boltz/Chai pipelines filter the PDB by release).
+
+```{python}
+pd.DataFrame([
+    {"model": m, "training cutoff": c,
+     "exposed": int((rel["release_date"] <= pd.Timestamp(c)).sum()),
+     "held out": N - int((rel["release_date"] <= pd.Timestamp(c)).sum()),
+     "% exposed": round(100 * (rel["release_date"] <= pd.Timestamp(c)).mean())}
+    for m, c in sorted(MODEL_CUTOFFS.items(), key=lambda kv: kv[1])])
+```
+
+**What this shows:**
+
+- AlphaFold2-Multimer and ColabFold, on a 2018 cutoff, have seen almost none of
+  Tier 1, so they are the closest thing here to a leakage-free test.
+- ESMFold2 and Boltz-2 could have seen 16 of the 18.
+- Exposure runs **opposite** to the accuracy ranking in
+  [analysis 1](01-pose-accuracy.html): the strongest combos have seen the most.
+  That is a reason for caution, not a demonstration of leakage.
+
+## Why the naive test fails
+
+Comparing accuracy before and after each cutoff is worthless at n=18, because a
+single hard structure moves it and several combos have only one or two targets
+on one side.
+
+## A matched-pair test, and why it also fails
+
+Where two references differ by a couple of residues but sit on opposite sides of
+a model's cutoff, structure difficulty is matched by construction, so a
+systematic win for the in-training member would be evidence of leakage.
+
+```{python}
+rdate = dict(zip(rel["pdb"], rel["release_date"]))
+rows = []
+for (m, f), _ in df.groupby(["model", "msa"]):
+    cut = pd.Timestamp(MODEL_CUT[m])
+    win_in = win_out = same = 0
+    for _, r in near.iterrows():
+        a, b = r["pdb_a"], r["pdb_b"]
+        if a not in rdate or b not in rdate:
+            continue
+        if (rdate[a] <= cut) == (rdate[b] <= cut):
+            continue
+        seen, unseen = (a, b) if rdate[a] <= cut else (b, a)
+        A, B = lookup.get((m, f, seen)), lookup.get((m, f, unseen))
+        if A is None or B is None:
+            continue
+        A_ok, B_ok = A[RA_COL] < RA_EFF_THRESHOLD, B[RA_COL] < RA_EFF_THRESHOLD
+        if A_ok and not B_ok:
+            win_in += 1
+        elif B_ok and not A_ok:
+            win_out += 1
+        else:
+            same += 1
+    if win_in + win_out + same:
+        rows.append({"combo": combo_label(m, f),
+                     "straddling pairs": win_in + win_out + same,
+                     "in-training better": win_in, "held-out better": win_out,
+                     "same outcome": same})
+matched = pd.DataFrame(rows)
+print(f"Totals: in-training better {matched['in-training better'].sum()}, "
+      f"held-out better {matched['held-out better'].sum()}, "
+      f"same {matched['same outcome'].sum()}")
+matched
+```
+
+**What this shows, and why it still fails:**
+
+- The totals lean towards the in-training member, concentrated in Chai-1 and the
+  No-MSA combos. The strongest MSA models show nothing at all.
+- **This is still not evidence of leakage.** The post-cutoff Tier-1 structures
+  are 7A8W, 7A8X, 7QPX and 7QZD, which are exactly the AVR-PikC and AVR-PikF
+  complexes and the engineered HMAs built to re-bind them. "Released recently"
+  and "recognition-evading interface" are the same set of structures here, for
+  reasons that have nothing to do with training data.
+- The pairs are also not independent, since a handful of structures appear in
+  many of them.
+
+## The one clean case points the other way
+
+5ZNG (2018) and 9IP6 (2025) differ by a single substitution and straddle every
+cutoff.
+
+```{python}
+clean = df[df["pdb"].isin(["5ZNG", "9IP6"])].pivot_table(
+    index=["model", "msa"], columns="pdb", values=RA_COL).round(2)
+clean.columns = ["5ZNG (in training)", "9IP6 (held out)"]
+clean["verdict"] = np.where(
+    (clean.iloc[:, 0] < RA_EFF_THRESHOLD) == (clean.iloc[:, 1] < RA_EFF_THRESHOLD),
+    "same", "DIFFERENT")
+clean.reset_index(drop=False)
+```
+
+**Conclusion for this tier.** No model changes its correct/incorrect verdict
+between the two. Tier 1 cannot test leakage, and no reworking of the statistics
+fixes that. The exposure table above should be read as a statement of what the
+models *could* have seen, not as an explanation of how they perform. Testing
+leakage properly needs the unrun tiers, which contain recent structures that are
+not evasion variants.

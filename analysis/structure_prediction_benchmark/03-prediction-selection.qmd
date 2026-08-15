@@ -1,0 +1,171 @@
+---
+title: "3. Which of the 25 predictions should you keep?"
+format:
+  html:
+    code-fold: true
+    toc: true
+    embed-resources: true
+jupyter: python3
+---
+
+**Objective.** Every combo produces 25 predictions per target (5 seeds × 5
+diffusion samples). Decide which one the pipeline should publish, using a rule
+that does not need the answer.
+
+**Why it matters.** [Analysis 1](01-pose-accuracy.html) reports the *best* of
+the 25, selected on RMSD against the reference. That is an oracle: it needs the
+structure the benchmark is trying to predict, so it cannot be reproduced on a
+novel target and it overstates what a pipeline would actually deliver. The
+question here is how much of that ceiling a reference-free rule can recover.
+
+```{python}
+import sys
+sys.path.insert(0, ".")
+from _common import *
+
+d = load()
+pred = d["pred"]
+```
+
+## Selection rules compared
+
+```{python}
+def pick_ok(g, col, ascending=False):
+    gg = g.dropna(subset=[col])
+    if not len(gg):
+        return np.nan
+    i = gg[col].idxmin() if ascending else gg[col].idxmax()
+    return bool(gg.loc[i, RA_COL] < RA_EFF_THRESHOLD)
+
+
+rows = []
+for (m, f, pdb), g in pred.groupby(["model", "msa", "pdb"]):
+    g = g.copy()
+    for c in ["plddt", "iptm", "ptm", "actifptm"]:
+        g["r_" + c] = g[c].rank(pct=True)
+    g["rank_avg"] = g[["r_plddt", "r_iptm", "r_ptm", "r_actifptm"]].sum(axis=1)
+    frac = (g[RA_COL] < RA_EFF_THRESHOLD).mean()
+    rows.append({
+        "model": m, "msa": f, "pdb": pdb,
+        "oracle (lowest RMSD)": bool(g[RA_COL].min() < RA_EFF_THRESHOLD),
+        "avg pLDDT": pick_ok(g, "plddt"),
+        "ipSAE": pick_ok(g, "ipsae_min"),
+        "lowest mean PAE": pick_ok(g, "pae_mean", ascending=True),
+        "actifpTM": pick_ok(g, "actifptm"),
+        "pTM": pick_ok(g, "ptm"),
+        "ipTM": pick_ok(g, "iptm"),
+        "rank-average of all four": pick_ok(g, "rank_avg"),
+        "consensus (modal pose)": bool(frac > 0.5),
+        "_arbitrary": frac,
+    })
+sel = pd.DataFrame(rows)
+
+RULES = ["oracle (lowest RMSD)", "avg pLDDT", "ipSAE", "lowest mean PAE",
+         "actifpTM", "pTM", "ipTM", "rank-average of all four",
+         "consensus (modal pose)"]
+ceiling = sel["oracle (lowest RMSD)"].mean()
+summary = pd.DataFrame([
+    {"rule": r, "targets posed correctly": f"{100 * sel[r].mean():.1f}%",
+     "% of oracle ceiling": f"{100 * sel[r].mean() / ceiling:.1f}%",
+     "reference-free?": "no" if r.startswith("oracle") else "yes"}
+    for r in RULES])
+summary.loc[len(summary)] = ["arbitrary single prediction",
+                             f"{100 * sel['_arbitrary'].mean():.1f}%",
+                             f"{100 * sel['_arbitrary'].mean() / ceiling:.1f}%",
+                             "yes"]
+summary
+```
+
+```{python}
+fig, ax = plt.subplots(figsize=(9, 5.6))
+vals = [100 * sel[r].mean() for r in RULES]
+cols = ["#999999" if r.startswith("oracle") else "#0072B2" for r in RULES]
+order = np.argsort(vals)
+ax.barh(np.arange(len(RULES)), [vals[i] for i in order],
+        color=[cols[i] for i in order], edgecolor="black", linewidth=0.6)
+ax.axvline(100 * sel["_arbitrary"].mean(), ls="--", color="#D55E00", lw=1.4)
+ax.text(100 * sel["_arbitrary"].mean(), -0.7, " arbitrary pick", color="#D55E00",
+        fontsize=9, va="top")
+ax.set_yticks(np.arange(len(RULES)))
+ax.set_yticklabels([RULES[i] for i in order], fontsize=9)
+ax.set_xlabel("% of (model, target) pairs posed correctly")
+save_fig(fig, "supp_selection_rule")
+plt.show()
+```
+
+**What this shows:**
+
+- **Average pLDDT is the best reference-free rule**, recovering about 88% of the
+  oracle ceiling. It is the strongest single score even though the task is
+  interface placement.
+- Combining scores does not help. The rank-average of all four lands at or below
+  the best single metric, so the interface measures are adding noise rather than
+  signal for this particular decision.
+- **Consensus is the surprise: it is worse than an arbitrary pick.** Taking the
+  modal pose loses decisively to confidence selection. [Analysis
+  6](06-failure-interface.html) explains why: when a model is biased toward the
+  wrong interface, most of its 25 samples go there, so majority voting amplifies
+  the bias instead of cancelling it. Consensus only works when errors are
+  independent, and here they are systematically correlated.
+
+## Head to head, and what each rule leaves on the table
+
+```{python}
+best_rule = "avg pLDDT"
+head = []
+for r in ["ipTM", "consensus (modal pose)", "actifpTM"]:
+    head.append({"rule": r,
+                 f"{best_rule} right, this wrong": int((sel[best_rule] & ~sel[r]).sum()),
+                 f"this right, {best_rule} wrong": int((~sel[best_rule] & sel[r]).sum())})
+pd.DataFrame(head)
+```
+
+```{python}
+recoverable = int(sel["oracle (lowest RMSD)"].sum())
+pd.DataFrame([
+    {"rule": r,
+     "recoverable cases missed":
+         int((sel["oracle (lowest RMSD)"] & ~sel[r]).sum()),
+     "of recoverable": recoverable}
+    for r in ["avg pLDDT", "ipTM", "actifpTM", "consensus (modal pose)"]])
+```
+
+## Per-model breakdown
+
+```{python}
+per = (sel.groupby(["model", "msa"])
+          .agg(**{"oracle": ("oracle (lowest RMSD)", "mean"),
+                  "avg pLDDT": ("avg pLDDT", "mean"),
+                  "ipTM": ("ipTM", "mean")})
+          .mul(100).round(0).astype(int).reset_index())
+per["combo"] = [combo_label(m, f) for m, f in zip(per["model"], per["msa"])]
+per[["combo", "oracle", "avg pLDDT", "ipTM"]].sort_values("oracle", ascending=False)
+```
+
+**What this shows:**
+
+- pLDDT wins or ties in almost every combo. Boltz-2 without an MSA is the
+  exception, where ipTM edges it.
+- The gap between the oracle column and the others is the cost of not knowing
+  the answer, and it is the most important caveat on the headline numbers in
+  analysis 1.
+
+## What the pipeline now does
+
+`compute_metrics.py` publishes one representative structure per model into
+`best_models/`. That selection is now **highest average pLDDT**; it was
+previously highest actifpTM (`results` is sorted by actifpTM, so `results[0]`
+was that pick). Both are reference-free and defensible; pLDDT is the better of
+the two on this set.
+
+Two caveats worth carrying:
+
+- The change does not propagate through `-resume`. `metrics.nf` invokes the
+  script by path interpolation, so the rendered command is unchanged and
+  Nextflow's cache hits. Staging the script as a declared `path` input would fix
+  that permanently.
+- In a design setting where an intended pose exists (for example an RFDiffusion
+  target), select on RMSD to that pose instead. The oracle rule is legitimately
+  available there. But selecting a design because it matches the pose you asked
+  for is circular as evidence that it binds, so pair it with the interface check
+  in [analysis 6](06-failure-interface.html).

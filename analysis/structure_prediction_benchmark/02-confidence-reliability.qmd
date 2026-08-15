@@ -1,0 +1,236 @@
+---
+title: "2. Can a model's own confidence be trusted?"
+format:
+  html:
+    code-fold: true
+    toc: true
+    embed-resources: true
+jupyter: python3
+---
+
+**Objective.** Determine whether the confidence scores a model reports tell you
+whether its pose is right, and where a usable cutoff sits.
+
+**Why it matters.** All 18 Tier-1 complexes are experimentally determined bound
+structures, so every case is a true interaction. If a confidence score is to be
+used as a binder-calling filter, it has to separate correct poses from incorrect
+ones on complexes that all genuinely bind.
+
+```{python}
+import sys
+sys.path.insert(0, ".")
+from _common import *
+
+d = load()
+df, pred = d["df"], d["pred"]
+```
+
+## Score distributions, correct against incorrect
+
+```{python}
+df = df.copy()
+# Correct poses are enriched for the MSA and restrained arms, both of which
+# raise confidence on their own, so colour by arm rather than by correctness.
+# The split stays on the y axis and the arms are visible within each row, which
+# is what shows the separation is not just arm composition.
+df["arm"] = np.where(df["model"].isin(USES_REFERENCE), "restraints", df["msa"])
+ARM_ORDER = ["no_msa", "msa", "restraints"]
+# Okabe-Ito, which is designed to survive the common forms of colour blindness.
+# Two warm colours would collapse together for a deuteranope, so the third is
+# separated by lightness as well as hue rather than being another red-purple.
+ARM_COLOR = {"no_msa": "#0072B2", "msa": "#D55E00", "restraints": "#F0E442"}
+ARM_LABEL = {"no_msa": "No MSA", "msa": "MSA",
+             "restraints": "restraints from the reference"}
+
+ok, bad = df[df[RA_COL] < RA_EFF_THRESHOLD], df[df[RA_COL] >= RA_EFF_THRESHOLD]
+metrics = [("plddt", "pLDDT / 100"), ("iptm", "ipTM"),
+           ("ipsae_min", "ipSAE (min)"), ("actifptm", "actifpTM")]
+
+# Six groups per metric: each arm split into correct and incorrect. Read the gap
+# WITHIN a pair as the effect of pose correctness and the shift BETWEEN pairs as
+# the effect of the arm. Pooling the arms, as a single correct/incorrect split
+# does, confounds the two, since correct poses are enriched for the MSA and
+# restrained arms and both of those raise confidence on their own.
+POS = {("no_msa", True): 0, ("no_msa", False): 1,
+       ("msa", True): 2.6, ("msa", False): 3.6,
+       ("restraints", True): 5.2, ("restraints", False): 6.2}
+rng = np.random.default_rng(0)
+
+fig, axes = plt.subplots(2, 2, figsize=(11.4, 9.2), sharex=True)
+for ax, (col, lab) in zip(axes.flat, metrics):
+    for arm in ARM_ORDER:
+        for is_ok in (True, False):
+            g = df[(df["arm"] == arm) &
+                   ((df[RA_COL] < RA_EFF_THRESHOLD) == is_ok)]
+            y = g[col].dropna().values
+            if col == "plddt":
+                y = y / 100.0
+            if not len(y):
+                continue
+            x = POS[(arm, is_ok)]
+            bp = ax.boxplot([y], positions=[x], widths=0.72, patch_artist=True,
+                            showfliers=False, medianprops=dict(color="black", lw=1.6))
+            patch = bp["boxes"][0]
+            patch.set_facecolor(ARM_COLOR[arm])
+            patch.set_alpha(0.55)
+            if not is_ok:
+                # Incorrect poses are hatched, so correctness survives greyscale
+                # and does not need a second colour dimension.
+                patch.set_hatch("///")
+            patch.set_edgecolor("black")
+            ax.scatter(x + rng.uniform(-0.22, 0.22, len(y)), y, s=13,
+                       color="black", alpha=0.45, zorder=3)
+            # Above the panel, since below the axis collides with the arm labels.
+            ax.text(x, 1.015, f"n={len(y)}", ha="center", va="bottom",
+                    fontsize=7.5, color="#555555",
+                    transform=ax.get_xaxis_transform())
+    ax.axhline(CONF_THRESHOLD, ls="--", color="grey", lw=1.2)
+    ax.set_ylim(-0.03, 1.03)
+    ax.set_ylabel(lab)
+    ax.set_xticks([0.5, 3.1, 5.7])
+    ax.set_xticklabels([ARM_LABEL[a].replace(" from the reference", "")
+                        for a in ARM_ORDER])
+    ax.set_xlim(-0.8, 7.0)
+
+handles = [plt.Rectangle((0, 0), 1, 1, fc="white", ec="black", alpha=0.55),
+           plt.Rectangle((0, 0), 1, 1, fc="white", ec="black", hatch="///")]
+fig.legend(handles, [f"correct (< {RA_EFF_THRESHOLD:g} Å)",
+                     f"incorrect (>= {RA_EFF_THRESHOLD:g} Å)"],
+           loc="lower center", ncol=2, frameon=True, fontsize=9.5,
+           bbox_to_anchor=(0.5, -0.005))
+fig.tight_layout(rect=[0, 0.05, 1, 1])
+# Room for the n= labels sitting above each panel.
+fig.subplots_adjust(hspace=0.30)
+save_fig(fig, "fig2_interface_confidence", thesis=True)
+plt.show()
+
+# The arm-stratified medians, since the pooled split is what the confound
+# question is about.
+print(df.groupby(["arm", df[RA_COL] < RA_EFF_THRESHOLD])[
+    [c for c, _ in metrics]].median().round(3).rename_axis(["arm", "correct"]).to_string())
+
+pd.DataFrame([
+    {"metric": lab,
+     "median (correct)": round(float(ok[col].median()), 3),
+     f">= {CONF_THRESHOLD:g} (correct)":
+         f"{int((ok[col] >= CONF_THRESHOLD).sum())}/{ok[col].notna().sum()} "
+         f"({100 * (ok[col] >= CONF_THRESHOLD).mean():.0f}%)",
+     "median (incorrect)": round(float(bad[col].median()), 3),
+     f">= {CONF_THRESHOLD:g} (incorrect)":
+         f"{int((bad[col] >= CONF_THRESHOLD).sum())}/{bad[col].notna().sum()} "
+         f"({100 * (bad[col] >= CONF_THRESHOLD).mean():.0f}%)"}
+    for col, lab in metrics])
+```
+
+**What this shows:**
+
+- The three interface scores separate the two rows cleanly. **pLDDT does not**,
+  overlapping almost entirely, which is expected given the fold/interface split
+  below.
+- The 0.8 cutoff is conservative. Few incorrect poses clear it, but it also
+  rejects a substantial share of predictions that were correctly posed, on
+  complexes that all genuinely bind. Treat it as a high-precision, low-recall
+  filter, not a decision boundary.
+- Tier 1 spans a wide affinity range, including AVR-PikC pairings and engineered
+  HMAs designed to restore recognition, so a low interface score on a genuinely
+  weak complex is not necessarily a model failure.
+
+## Where should the cutoff be?
+
+Using all {python} f"{len(pred):,}" predictions, so failures are represented.
+
+```{python}
+y_all = pred["correct"].values
+grid = np.linspace(0.05, 0.95, 91)
+MCOL = {"iptm": "#0072B2", "actifptm": "#009E73", "ipsae_min": "#D55E00"}
+
+fig, ax = plt.subplots(figsize=(7.6, 5.6))
+for col, lab in [("iptm", "ipTM"), ("actifptm", "actifpTM"),
+                 ("ipsae_min", "ipSAE")]:
+    v = pred[col].values
+    rec = [((v >= t) & y_all).sum() / y_all.sum() for t in grid]
+    prc = [((v >= t) & y_all).sum() / max((v >= t).sum(), 1) for t in grid]
+    ax.plot(grid, rec, color=MCOL[col], lw=1.8, label=f"{lab} recall")
+    ax.plot(grid, prc, color=MCOL[col], lw=1.8, ls="--", label=f"{lab} precision")
+ax.axvline(CONF_THRESHOLD, ls="--", color="grey", lw=1.2)
+ax.set_xlabel("Threshold")
+ax.set_ylabel("Recall (solid) / precision (dashed)")
+ax.legend(frameon=False, fontsize=8, ncol=2, loc="lower left")
+save_fig(fig, "supp_confidence_threshold_sweep")
+plt.show()
+
+pd.DataFrame([
+    {"ipTM threshold": t,
+     "recall": round(float(((pred["iptm"] >= t) & y_all).sum() / y_all.sum()), 2),
+     "FPR": round(float(((pred["iptm"] >= t) & ~y_all).sum() / (~y_all).sum()), 2),
+     "precision": round(float(((pred["iptm"] >= t) & y_all).sum() /
+                              max((pred["iptm"] >= t).sum(), 1)), 2)}
+    for t in [0.5, 0.6, 0.7, 0.8, 0.9]])
+```
+
+**What this shows:**
+
+- Precision is close to flat above about 0.5 while recall falls away steeply.
+  Raising the cutoff from 0.5 to 0.8 buys almost no precision and costs real
+  recall; 0.9 is strictly wasteful.
+- If a defensible cutoff is needed, the knee is around 0.6–0.7.
+
+## Is confidence informative within a single model?
+
+Pooling every model lets a score win by proxying for *which model* made the
+prediction, since strong models produce both better poses and higher confidence.
+Splitting by model removes that confound.
+
+```{python}
+METRICS = [("iptm", "ipTM"), ("actifptm", "actifpTM"), ("ipsae_min", "ipSAE"),
+           ("ptm", "pTM"), ("plddt", "pLDDT")]
+rows = []
+for (m, f), g in pred.groupby(["model", "msa"]):
+    yg = g["correct"].values
+    row = {"combo": combo_label(m, f), "n": len(g),
+           "% correct": round(100 * yg.mean())}
+    row.update({lab: round(auc(g[col].values, yg), 3) for col, lab in METRICS})
+    rows.append(row)
+pd.DataFrame(rows).sort_values("% correct", ascending=False).reset_index(drop=True)
+```
+
+**What this shows:**
+
+- Within-model discrimination stays high, so confidence is genuinely
+  informative and not just a model-identity proxy.
+- **Chai-1 has no ipSAE.** It emits no PAE matrix, so every PAE-derived metric
+  is uncomputable; those values are blanked rather than read as zero (see the
+  load message above). Do not compare Chai-1 on ipSAE.
+- pTM and pLDDT score at least as well as the interface-specific measures. On a
+  benchmark where both partners are small well-folded domains, global confidence
+  largely tracks whether the docking worked.
+
+## Is the difficulty in the fold or the interface?
+
+`ra_eff` is measured after superposing the receptor, so it isolates the
+effector's placement. Comparing it against the receptor's own RMSD separates a
+failure to fold from a failure to dock.
+
+```{python}
+rec_ok = pred["rmsd_receptor"] < 2.0
+eff_ok = pred["correct"]
+pd.DataFrame([
+    {"outcome": "receptor folded (< 2 Å)", "n": int(rec_ok.sum()),
+     "% of predictions": round(100 * rec_ok.mean(), 1)},
+    {"outcome": "effector docked (< 5 Å)", "n": int(eff_ok.sum()),
+     "% of predictions": round(100 * eff_ok.mean(), 1)},
+    {"outcome": "receptor right, effector wrong", "n": int((rec_ok & ~eff_ok).sum()),
+     "% of predictions": round(100 * (rec_ok & ~eff_ok).mean(), 1)},
+    {"outcome": "both wrong", "n": int((~rec_ok & ~eff_ok).sum()),
+     "% of predictions": round(100 * (~rec_ok & ~eff_ok).mean(), 1)},
+])
+```
+
+**What this shows:**
+
+- Monomer folding of these small HMA domains is effectively solved, while the
+  effector is placed correctly far less often. Nearly half of all predictions
+  fold the receptor correctly and still dock the effector wrongly.
+- The benchmark is therefore measuring interface placement, not folding. That is
+  why pLDDT is a weak guide above: it is dominated by the part of the problem
+  that almost never fails.
