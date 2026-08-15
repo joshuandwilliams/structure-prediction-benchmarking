@@ -69,12 +69,34 @@ singularity build --fakeroot esmfold2.img esmfold2.def
 Approximate build cost: ~13 GB of weights and 30–45 min for the benchmark
 image, ~27 GB and longer for ESMFold2 (ESMC-6B alone is ~25 GB).
 
-## Recording versions for a write-up
+## Versions in the built images
 
-The definition files pin only some versions explicitly (`chai_lab==0.6.1`,
-`torch==2.6.0`, `xformers==0.0.29.post3`); Boltz and ColabFold are installed
-unpinned, so the version that actually ran is a property of the built image.
-To read it back:
+The definition files pin only some versions explicitly. Boltz, ColabFold and
+MMseqs2 are installed unpinned, so the version that actually ran is a property
+of the built image rather than of the def file. Read back from the images as
+built on 2026-08-15, under Singularity 3.8.7:
+
+| Image | Package | Version |
+|---|---|---|
+| `Boltz1_Boltz2_Chai1.img` | `boltz` (serves both Boltz-1 and Boltz-2) | 2.2.1 |
+| | `chai_lab` | 0.6.1 |
+| | `torch` | 2.6.0+cu124 |
+| | `trifast` | 0.1.13 |
+| | `numpy` / `pandas` / `scipy` | 1.26.4 / 2.3.3 / 1.13.1 |
+| | `gemmi` / `biopython` | 0.6.5 / 1.84 |
+| `colabfold.img` | `colabfold` | 1.6.1 |
+| | `jax` / `jaxlib` | 0.5.3 |
+| | MMseqs2 | commit `76da68a` |
+| `esmfold2.img` | `esm` | 3.3.0 |
+| | `transformers` (Biohub fork) | 4.57.6 |
+| | `xformers` | 0.0.29.post3 |
+| | `torch` | 2.6.0+cu124 |
+
+AlphaFold2-Multimer and AlphaFold 3 come from the HPC source packages named in
+`../main.nf`, at application versions 2.3.2 and 3.0.0 respectively (from each
+package's `Singularity.manifest`).
+
+Regenerate this table with:
 
 ```bash
 singularity exec <image>.img pip list --format=freeze
