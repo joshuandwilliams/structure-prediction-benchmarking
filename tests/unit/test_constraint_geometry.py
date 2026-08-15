@@ -158,3 +158,49 @@ def test_boltz2_cli_contact_cap(make_pdb_file, two_chain_atoms):
     r = _run("extract_constraints_boltz2.py", "B", "C", 8.0, 1, 0.0, 8.0, 8.0, pdb=pdb)
     assert r.returncode == 0, r.stderr
     assert r.stdout.count("- contact:") == 1      # capped at 1
+
+
+# ── read_ca_indexed: Boltz token numbering ──────────────────────────────────
+# Constraints must be written in the 1..N numbering Boltz assigns to the
+# sequence it is given, not the reference PDB's author numbering. Emitting
+# author numbers made every Boltz-2 constraint point at a non-existent residue,
+# which Boltz silently ignored, so the constrained runs were indistinguishable
+# from unconstrained ones.
+
+def _ca(chain, resseq, x, y=0.0, z=0.0):
+    return {"chain": chain, "resseq": resseq, "x": x, "y": y, "z": z}
+
+
+def test_read_ca_indexed_is_one_based_sequential(make_pdb_file):
+    atoms = [_ca("B", 996, 0.0), _ca("B", 997, 1.0), _ca("B", 998, 2.0)]
+    coords, labels = geom.read_ca_indexed(make_pdb_file(atoms))
+    assert sorted(coords["B"]) == [1, 2, 3]
+    assert coords["B"][1] == (0.0, 0.0, 0.0)
+    assert labels["B"] == {1: "996", 2: "997", 3: "998"}
+
+
+def test_read_ca_indexed_closes_numbering_gaps(make_pdb_file):
+    """A gap in author numbering must NOT leave a gap in the token index:
+    Boltz numbers the sequence it receives, which has no gaps."""
+    atoms = [_ca("B", 10, 0.0), _ca("B", 20, 1.0), _ca("B", 21, 2.0)]
+    coords, labels = geom.read_ca_indexed(make_pdb_file(atoms))
+    assert sorted(coords["B"]) == [1, 2, 3]
+    assert labels["B"][2] == "20"
+
+
+def test_read_ca_indexed_filters_requested_chains(make_pdb_file, two_chain_atoms):
+    coords, _ = geom.read_ca_indexed(make_pdb_file(two_chain_atoms), chains={"B"})
+    assert set(coords) == {"B"}
+
+
+def test_read_ca_indexed_emitted_constraints_are_in_range(make_pdb_file):
+    """Every emitted index must fall within 1..chain_length."""
+    atoms = [_ca("B", 900 + i, float(i)) for i in range(5)]
+    atoms += [_ca("C", 40 + i, float(i), y=3.0) for i in range(4)]
+    coords, _ = geom.read_ca_indexed(make_pdb_file(atoms))
+    pocket = geom.pocket_residues(coords["B"], coords["C"], cutoff=8.0)
+    pairs = geom.contact_pairs(coords["B"], coords["C"], cutoff=8.0, max_pairs=10)
+    assert pocket, "expected some pocket residues in this geometry"
+    assert all(1 <= r <= len(coords["B"]) for r in pocket)
+    assert all(1 <= r <= len(coords["B"]) for r, _, _ in pairs)
+    assert all(1 <= e <= len(coords["C"]) for _, e, _ in pairs)

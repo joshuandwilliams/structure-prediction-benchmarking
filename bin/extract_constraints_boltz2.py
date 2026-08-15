@@ -21,7 +21,7 @@ from _constraint_geometry import (
     format_contact_block,
     format_pocket_block,
     pocket_residues,
-    read_ca_by_chain,
+    read_ca_indexed,
 )
 
 
@@ -41,9 +41,14 @@ def main():
     pocket_cutoff  = float(sys.argv[7])
     pocket_max_d   = float(sys.argv[8])
 
-    coords = read_ca_by_chain(pdb_path, chains={rec_chain, eff_chain})
+    # Indexed by Boltz token position, NOT the reference's author numbering —
+    # see read_ca_indexed. Emitting author numbers makes every constraint point
+    # at a residue that does not exist, which is silently ignored.
+    coords, labels = read_ca_indexed(pdb_path, chains={rec_chain, eff_chain})
     rec_ca = coords.get(rec_chain, {})
     eff_ca = coords.get(eff_chain, {})
+    rec_lbl = labels.get(rec_chain, {})
+    eff_lbl = labels.get(eff_chain, {})
 
     if not rec_ca:
         print(f"ERROR: No Cα atoms for chain {rec_chain}", file=sys.stderr)
@@ -59,16 +64,18 @@ def main():
     print(f"Pocket residues:   {len(pocket)} (within {pocket_cutoff} Å)",
           file=sys.stderr)
     if pocket:
-        print(f"  Range: {min(pocket)}-{max(pocket)}", file=sys.stderr)
+        print(f"  Token range: {min(pocket)}-{max(pocket)} "
+              f"(author {rec_lbl.get(min(pocket), '?')}-{rec_lbl.get(max(pocket), '?')})",
+              file=sys.stderr)
 
     contacts = contact_pairs(rec_ca, eff_ca, contact_cutoff, contact_max)
     print(f"Contact pairs:     {len(contacts)} (within {contact_cutoff} Å, capped at {contact_max})",
           file=sys.stderr)
     if contacts:
-        print(f"  Closest: {rec_chain}{contacts[0][0]}-{eff_chain}{contacts[0][1]}: {contacts[0][2]:.1f} A",
-              file=sys.stderr)
-        print(f"  Widest:  {rec_chain}{contacts[-1][0]}-{eff_chain}{contacts[-1][1]}: {contacts[-1][2]:.1f} A",
-              file=sys.stderr)
+        for lab, (r_rn, e_rn, d) in (("Closest", contacts[0]), ("Widest ", contacts[-1])):
+            print(f"  {lab}: {rec_chain}{r_rn}-{eff_chain}{e_rn}: {d:.1f} A "
+                  f"(author {rec_chain}{rec_lbl.get(r_rn, '?')}-"
+                  f"{eff_chain}{eff_lbl.get(e_rn, '?')})", file=sys.stderr)
 
     if not pocket and not contacts:
         print("ERROR: No constraints generated. Check chain IDs.", file=sys.stderr)

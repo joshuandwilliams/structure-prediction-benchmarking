@@ -44,6 +44,61 @@ def read_ca_by_chain(pdb_path, chains=None):
     return coords
 
 
+def read_ca_indexed(pdb_path, chains=None):
+    """Cα coordinates keyed by the residue's **Boltz token index**.
+
+    Boltz renumbers whatever sequence it is given as 1..N per chain, so a
+    constraint written in the reference PDB's author numbering points at the
+    wrong residue, or at none at all. For example 9IMU's receptor is authored
+    996-1070 but reaches Boltz as 1-75, and its effector is authored 33-113 but
+    arrives as 1-81 — an offset of 32 that silently mis-targets every contact.
+
+    The index assigned here must therefore match the order in which residues
+    appear in the sequence handed to Boltz by extract_sequences.py, which is
+    file order over the polymer. Residues are enumerated from every ATOM record
+    (not only Cα) so a residue whose Cα is missing still consumes an index.
+
+    Keying on ``(resseq, icode)`` rather than the bare integer is defensive
+    rather than a fix for a live defect: 6FU9 and 6FUD each carry a single
+    insertion-coded residue (B 83C), but no plain B83 accompanies it, so the
+    integer key happens not to collide on the current reference set. It would
+    on a reference where both are present, silently dropping one and shifting
+    every index after it.
+
+    Returns ``(coords, labels)``:
+      ``coords``  ``{chain: {index: (x, y, z)}}`` — Cα only, for the geometry
+      ``labels``  ``{chain: {index: "1065"}}`` — author numbering, for logging
+    """
+    wanted = set(chains) if chains is not None else None
+    order: dict[str, list[tuple[int, str]]] = {}
+    ca: dict[str, dict[tuple[int, str], tuple[float, float, float]]] = {}
+
+    with open(pdb_path) as fh:
+        for line in fh:
+            if not line.startswith("ATOM"):
+                continue
+            ch = line[21]
+            if wanted is not None and ch not in wanted:
+                continue
+            key = (int(line[22:26].strip()), line[26].strip())
+            seen = order.setdefault(ch, [])
+            if not seen or seen[-1] != key:
+                if key not in seen:          # first appearance defines the index
+                    seen.append(key)
+            if line[12:16].strip() == "CA":
+                ca.setdefault(ch, {})[key] = (
+                    float(line[30:38]), float(line[38:46]), float(line[46:54]),
+                )
+
+    coords: dict[str, dict[int, tuple[float, float, float]]] = {}
+    labels: dict[str, dict[int, str]] = {}
+    for ch, keys in order.items():
+        idx_of = {k: i + 1 for i, k in enumerate(keys)}
+        labels[ch] = {i + 1: f"{k[0]}{k[1]}" for i, k in enumerate(keys)}
+        coords[ch] = {idx_of[k]: xyz for k, xyz in ca.get(ch, {}).items()}
+    return coords, labels
+
+
 def distance(a, b):
     """Euclidean distance between two 3-tuples."""
     return math.sqrt(sum((p - q) ** 2 for p, q in zip(a, b)))

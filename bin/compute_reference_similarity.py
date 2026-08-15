@@ -14,11 +14,25 @@ constructs: two entries can have the same underlying protein but different
 modelled boundaries, which is a construct difference rather than a sequence
 difference.
 
-Identity is computed over the shorter sequence, so it is not deflated by one
-construct simply being longer than the other.
+Alignment is done by EMBOSS ``needle`` (Needleman-Wunsch, global), called as a
+subprocess with ``-aformat3 fasta`` so the gapped sequences come back directly.
+Using the standard tool rather than a hand-rolled aligner means the parameters
+are the published EMBOSS defaults (EBLOSUM62, gap open 10.0, gap extend 0.5) and
+the alignment is reproducible by anyone with EMBOSS.
 
-Requires biopython.  Output is small (n*(n-1)/2 rows) and meant to be committed
-so the analysis renders without re-running this.
+Percent identity has no single agreed definition, so **both** conventional
+denominators are emitted and neither is left implicit:
+
+* ``*_identity`` divides by the shorter ungapped sequence.  A construct is then
+  not penalised for residues the other entry simply did not model, which is what
+  we want here, since several references are the same protein resolved to
+  different boundaries.
+* ``*_identity_over_alignment`` divides by the full alignment length, including
+  gap columns.  This is the number ``needle`` itself prints.
+
+Requires biopython (sequence extraction from coordinates) and EMBOSS on PATH.
+Output is small (n*(n-1)/2 rows) and meant to be committed so the analysis
+renders without re-running this.
 
 Usage:
     compute_reference_similarity.py --tier 1 --output reference_similarity.csv
@@ -28,14 +42,15 @@ import argparse
 import csv
 import itertools
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import warnings
 
 warnings.filterwarnings("ignore")
 
 try:
-    from Bio import Align
-    from Bio.Align import substitution_matrices
     from Bio.PDB import PDBParser, PPBuilder
 except ImportError:
     sys.exit("ERROR: biopython required.  pip install biopython")
@@ -43,14 +58,42 @@ except ImportError:
 RECEPTOR_CHAIN = "A"    # plant protein, by the data/ two-chain convention
 EFFECTOR_CHAIN = "B"    # pathogen effector
 
+# EMBOSS needle defaults, stated explicitly so the run is reproducible.
+GAP_OPEN = "10.0"
+GAP_EXTEND = "0.5"
+MATRIX = "EBLOSUM62"
 
-def build_aligner():
-    al = Align.PairwiseAligner()
-    al.substitution_matrix = substitution_matrices.load("BLOSUM62")
-    al.open_gap_score = -11
-    al.extend_gap_score = -1
-    al.mode = "global"
-    return al
+
+def needle_align(a, b, workdir):
+    """Global-align two sequences with EMBOSS needle. Returns the gapped pair."""
+    fa = os.path.join(workdir, "a.fasta")
+    fb = os.path.join(workdir, "b.fasta")
+    out = os.path.join(workdir, "aln.fasta")
+    with open(fa, "w") as fh:
+        fh.write(f">a\n{a}\n")
+    with open(fb, "w") as fh:
+        fh.write(f">b\n{b}\n")
+    subprocess.run(
+        ["needle", "-asequence", fa, "-bsequence", fb,
+         "-gapopen", GAP_OPEN, "-gapextend", GAP_EXTEND,
+         "-datafile", MATRIX, "-aformat3", "fasta",
+         "-outfile", out, "-auto"],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+    seqs, cur = [], []
+    with open(out) as fh:
+        for line in fh:
+            if line.startswith(">"):
+                if cur:
+                    seqs.append("".join(cur))
+                cur = []
+            else:
+                cur.append(line.strip())
+    if cur:
+        seqs.append("".join(cur))
+    if len(seqs) != 2 or len(seqs[0]) != len(seqs[1]):
+        raise RuntimeError("unexpected needle output")
+    return seqs[0].upper(), seqs[1].upper()
 
 
 def chain_sequences(pdb_path):
@@ -64,12 +107,11 @@ def chain_sequences(pdb_path):
     return out
 
 
-def compare(aligner, a, b):
-    """Return (pct_identity_over_shorter, n_substitutions, n_gap_positions)."""
+def compare(workdir, a, b):
+    """Identity by both denominators, plus substitution and gap counts."""
     if not a or not b:
-        return None, None, None
-    aln = aligner.align(a, b)[0]
-    ga, gb = aln[0], aln[1]
+        return None, None, None, None
+    ga, gb = needle_align(a, b, workdir)
     matches = subs = gaps = 0
     for x, y in zip(ga, gb):
         if x == "-" or y == "-":
@@ -78,7 +120,9 @@ def compare(aligner, a, b):
             matches += 1
         else:
             subs += 1
-    return 100.0 * matches / min(len(a), len(b)), subs, gaps
+    return (100.0 * matches / min(len(a), len(b)),
+            100.0 * matches / len(ga),
+            subs, gaps)
 
 
 def main():
@@ -112,28 +156,36 @@ def main():
         seqs[pdb] = chain_sequences(path)
     print(f"Read {len(seqs)} references")
 
-    aligner = build_aligner()
+    if shutil.which("needle") is None:
+        sys.exit("ERROR: EMBOSS needle not on PATH.  "
+                 "conda install -c bioconda emboss")
+
     out = []
-    for a, b in itertools.combinations(sorted(seqs), 2):
-        rec_id, rec_sub, rec_gap = compare(
-            aligner, seqs[a].get(RECEPTOR_CHAIN, ""), seqs[b].get(RECEPTOR_CHAIN, ""))
-        eff_id, eff_sub, eff_gap = compare(
-            aligner, seqs[a].get(EFFECTOR_CHAIN, ""), seqs[b].get(EFFECTOR_CHAIN, ""))
-        if rec_id is None or eff_id is None:
-            continue
-        out.append({
-            "pdb_a": a, "pdb_b": b,
-            "system_a": system.get(a, ""), "system_b": system.get(b, ""),
-            "same_system": system.get(a) == system.get(b),
-            "receptor_identity": round(rec_id, 2),
-            "receptor_substitutions": rec_sub,
-            "receptor_gap_positions": rec_gap,
-            "effector_identity": round(eff_id, 2),
-            "effector_substitutions": eff_sub,
-            "effector_gap_positions": eff_gap,
-            "min_identity": round(min(rec_id, eff_id), 2),
-            "total_substitutions": rec_sub + eff_sub,
-        })
+    with tempfile.TemporaryDirectory() as workdir:
+        for a, b in itertools.combinations(sorted(seqs), 2):
+            rec = compare(workdir, seqs[a].get(RECEPTOR_CHAIN, ""),
+                          seqs[b].get(RECEPTOR_CHAIN, ""))
+            eff = compare(workdir, seqs[a].get(EFFECTOR_CHAIN, ""),
+                          seqs[b].get(EFFECTOR_CHAIN, ""))
+            if rec[0] is None or eff[0] is None:
+                continue
+            rec_id, rec_id_aln, rec_sub, rec_gap = rec
+            eff_id, eff_id_aln, eff_sub, eff_gap = eff
+            out.append({
+                "pdb_a": a, "pdb_b": b,
+                "system_a": system.get(a, ""), "system_b": system.get(b, ""),
+                "same_system": system.get(a) == system.get(b),
+                "receptor_identity": round(rec_id, 2),
+                "receptor_identity_over_alignment": round(rec_id_aln, 2),
+                "receptor_substitutions": rec_sub,
+                "receptor_gap_positions": rec_gap,
+                "effector_identity": round(eff_id, 2),
+                "effector_identity_over_alignment": round(eff_id_aln, 2),
+                "effector_substitutions": eff_sub,
+                "effector_gap_positions": eff_gap,
+                "min_identity": round(min(rec_id, eff_id), 2),
+                "total_substitutions": rec_sub + eff_sub,
+            })
 
     with open(args.output, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(out[0].keys()))

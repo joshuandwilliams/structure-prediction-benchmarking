@@ -1918,8 +1918,35 @@ def main():
 
     print(f"\nWrote {len(results)} entries to {args.output_csv}")
 
-    best = results[0]
-    print(f"\nBest model ({args.model}): {best.get('model_name', 'unknown')}")
+    # Which prediction to publish as this model's representative.
+    #
+    # The choice must be reference-free: selecting the lowest-RMSD prediction
+    # would need the answer the benchmark is trying to measure, and could not be
+    # reproduced on a novel target where no reference exists.  results is sorted
+    # by actifpTM above, so results[0] was previously that pick.  On the Tier-1
+    # set, average pLDDT recovers more of the achievable ceiling than any
+    # interface score: it poses 49.5% of targets correctly against 47.2% for
+    # actifpTM and 46.8% for ipTM, where selecting on RMSD would give 56.5%.
+    # Rank-averaged combinations of the confidence scores did no better than
+    # pLDDT alone.
+    #
+    # pLDDT is only compared within one model's own predictions here, so the
+    # fact that Boltz reports 0-1 while the AlphaFold lineage reports 0-100 does
+    # not affect the comparison.
+    def _plddt_key(entry):
+        v = entry.get("avg_plddt")
+        return v if isinstance(v, (int, float)) and v > 0 else None
+
+    scored = [r for r in results if _plddt_key(r) is not None]
+    if scored:
+        best = max(scored, key=_plddt_key)
+        basis = "highest avg_plddt"
+    else:
+        best = results[0]
+        basis = "highest actifptm (no usable pLDDT)"
+
+    print(f"\nSelected model ({args.model}): "
+          f"{best.get('model_name', 'unknown')} [{basis}]")
     confidence_fields = [f for f in CSV_FIELDS[3:]
                          if not f.startswith("rmsd_") and not f.startswith("n_")]
     rmsd_fields = [f for f in CSV_FIELDS if f.startswith("rmsd_") or f.startswith("n_")]

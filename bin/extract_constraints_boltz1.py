@@ -19,7 +19,7 @@ import sys
 from _constraint_geometry import (
     format_pocket_block,
     pocket_residues,
-    read_ca_by_chain,
+    read_ca_indexed,
 )
 
 
@@ -35,9 +35,12 @@ def main():
     pocket_cutoff = float(sys.argv[4])
     pocket_max_d  = float(sys.argv[5])
 
-    coords = read_ca_by_chain(pdb_path, chains={rec_chain, eff_chain})
+    # Indexed by Boltz token position, NOT author numbering — see
+    # read_ca_indexed. Author numbers point at residues Boltz does not have.
+    coords, labels = read_ca_indexed(pdb_path, chains={rec_chain, eff_chain})
     rec_ca = coords.get(rec_chain, {})
     eff_ca = coords.get(eff_chain, {})
+    rec_lbl = labels.get(rec_chain, {})
 
     if not rec_ca:
         print(f"ERROR: No Cα atoms for chain {rec_chain}", file=sys.stderr)
@@ -53,7 +56,9 @@ def main():
     print(f"Pocket residues:   {len(pocket)} (within {pocket_cutoff} Å)",
           file=sys.stderr)
     if pocket:
-        print(f"  Range: {min(pocket)}-{max(pocket)}", file=sys.stderr)
+        print(f"  Token range: {min(pocket)}-{max(pocket)} "
+              f"(author {rec_lbl.get(min(pocket), '?')}-{rec_lbl.get(max(pocket), '?')})",
+              file=sys.stderr)
 
     if not pocket:
         print("ERROR: No pocket residues found. Check chain IDs.", file=sys.stderr)

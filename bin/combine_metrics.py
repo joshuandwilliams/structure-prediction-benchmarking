@@ -3,9 +3,17 @@
 Combine per-benchmark all_metrics.csv files into one summary CSV.
 
 For every (model, msa, pdb) combination it keeps the single prediction with the
-LOWEST ra_eff (rmsd_effector_receptor_aligned, the receptor-aligned effector
-RMSD) — i.e. the best effector pose — and carries through ALL of that
-prediction's metric columns so you can select whichever you want later.
+HIGHEST avg_plddt — the model's own most confident structure — and carries
+through ALL of that prediction's metric columns so you can select whichever you
+want later.
+
+Why confidence and not the lowest ra_eff: selecting on ra_eff needs the solved
+structure, so it reports an oracle that no pipeline can reach on a novel target.
+The design pipeline this benchmark supports only ever acts on the structure Boltz
+ranks first by its own confidence (``model_0``), so confidence selection is what
+the models actually deliver. It is also the conventional top-1 benchmark
+convention. ``analysis/.../per_prediction_metrics.csv`` still holds every
+prediction if an oracle upper bound is wanted.
 
 Output columns:
     model, msa, pdb, predictor, <every column from all_metrics.csv>
@@ -15,9 +23,9 @@ Output columns:
     directory name, e.g. boltz1_msa), kept for traceability.
   - all remaining all_metrics.csv columns (avg_plddt, ptm, iptm, the rmsd_*
     family incl. the _core variants, ipsae_*, etc.) are passed through verbatim
-    from the chosen (lowest-ra_eff) prediction.
+    from the chosen (highest-avg_plddt) prediction.
 
-ra_eff used for selection = rmsd_effector_receptor_aligned.
+Selection key = avg_plddt (highest wins). ra_eff is carried through, not used to select.
 
 The "model" column in all_metrics.csv is the predictor directory name; we split
 it into a base model + an msa flag ("msa" / "no_msa"):
@@ -55,7 +63,8 @@ MODEL_MAP = {
     "esmfold2":           ("esmfold2",           "no_msa"),
 }
 
-RA_EFF_COL = "rmsd_effector_receptor_aligned"   # selection key: lowest is best
+RA_EFF_COL = "rmsd_effector_receptor_aligned"   # carried through, not the selection key
+SELECT_COL = "avg_plddt"                        # selection key: HIGHEST wins
 DERIVED = ["model", "msa", "pdb", "predictor"]  # prepended; "predictor" = orig "model"
 
 
@@ -99,13 +108,13 @@ def main():
     if not os.path.isdir(bench_dir):
         sys.exit(f"ERROR: benchmarks dir not found: {bench_dir}")
 
-    # best[(model, msa, pdb)] = (ra_eff_value, full_source_row_dict)
+    # best[(model, msa, pdb)] = (avg_plddt_value, full_source_row_dict)
     best = {}
     n_files = 0
     n_rows = 0
     src_fieldnames = None       # column order from the first all_metrics.csv read
     unknown_models = set()
-    no_score = set()           # combos seen but with no valid ra_eff anywhere
+    no_score = set()           # combos with no usable confidence or ra_eff
     missing = []               # benchmark dirs without an all_metrics.csv
 
     for pdb in sorted(os.listdir(bench_dir)):
@@ -132,12 +141,13 @@ def main():
                 model, msa = map_model(raw_model)
                 key = (model, msa, pdb)
 
-                ra = to_float(row.get(RA_EFF_COL))
-                if ra is None:
+                score = to_float(row.get(SELECT_COL))
+                if score is None or to_float(row.get(RA_EFF_COL)) is None:
+                    # No confidence to select on, or no ra_eff to score with.
                     no_score.add(key)
                     continue
-                if key not in best or ra < best[key][0]:
-                    best[key] = (ra, dict(row))   # keep the whole prediction
+                if key not in best or score > best[key][0]:
+                    best[key] = (score, dict(row))   # keep the whole prediction
 
     if src_fieldnames is None:
         src_fieldnames = []
@@ -165,7 +175,7 @@ def main():
 
     # ── Summary ───────────────────────────────────────────────────────────
     print(f"Read {n_rows} predictions from {n_files} benchmark(s).")
-    print(f"Wrote {len(rows)} (model, msa, pdb) best-by-ra_eff rows -> {args.output}")
+    print(f"Wrote {len(rows)} (model, msa, pdb) best-by-confidence rows -> {args.output}")
     if missing:
         print(f"NOTE: {len(missing)} benchmark dir(s) had no all_metrics.csv: "
               f"{', '.join(missing)}")
