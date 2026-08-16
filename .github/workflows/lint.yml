@@ -15,10 +15,11 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      # Pinned rather than floating. An unpinned ruff picks up new default rules
-      # on release and fails CI on code that passed locally.
+      # Pinned to the version in environment.yml, so CI and a local run apply
+      # the same rule set. An unpinned ruff picks up new default rules on
+      # release and fails CI on code that passed locally.
       - name: Install ruff
-        run: pip install "ruff==0.15.21"
+        run: pip install "ruff==0.16.2"
 
       # Configuration lives in pyproject under [tool.ruff]. Line length 100,
       # PEP 8 (E, W) and PEP 257 (D, minus D1xx).

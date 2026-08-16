@@ -48,7 +48,7 @@ dependencies:
 
   # Repo tooling (see [tool.pytest.ini_options] / [tool.ruff] in pyproject.toml).
   - pytest=9.1.1
-  - pytest-cov=7.0.0
+  - pytest-cov=7.1.0
   - ruff=0.16.2
 
   - pip
