@@ -73,7 +73,19 @@ STATE_DIR="${PIPELINE_DIR}/experiments/array_results"
 if [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
     LISTFILE="${1:?array mode: missing pdb list file}"
     PARAMS="${2:-params.yml}"
+    # SLURM copies the submitted script into its own spool directory, so $0
+    # points at /var/spool/slurmd/... rather than into the repo and the
+    # PIPELINE_DIR derived above is wrong. The launcher knows the real root and
+    # passes it as $3; SLURM_SUBMIT_DIR is the fallback for a hand-built sbatch.
+    PIPELINE_DIR="${3:-${SLURM_SUBMIT_DIR:-${PIPELINE_DIR}}}"
+    BENCH_DIR="${PIPELINE_DIR}/experiments/benchmarks"
     idx="${SLURM_ARRAY_TASK_ID}"
+
+    if [ ! -d "${BENCH_DIR}" ]; then
+        echo "ERROR: ${BENCH_DIR} is not a directory. Array mode needs the" >&2
+        echo "       repo root as \$3, or SLURM_SUBMIT_DIR set." >&2
+        exit 1
+    fi
 
     PDB="$(sed -n "$((idx + 1))p" "${LISTFILE}")"
     if [ -z "${PDB}" ]; then
@@ -207,7 +219,7 @@ jobid="$(sbatch --parsable \
     --array="0-$((N - 1))%${MAX_CONCURRENT}" \
     --output="${STATE_DIR}/nf_%A_%a.out" \
     --error="${STATE_DIR}/nf_%A_%a.err" \
-    "${SELF}" "${LISTFILE}" "${PARAMS}")"
+    "${SELF}" "${LISTFILE}" "${PARAMS}" "${PIPELINE_DIR}")"
 
 echo "Submitted array job ${jobid}: ${N} tasks, %${MAX_CONCURRENT} concurrent, auto-requeue."
 echo "List file: ${LISTFILE}"
