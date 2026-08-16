@@ -1,6 +1,16 @@
 # =============================================================================
-# Benchmark — 7QZD  (Tier 1: engineered Pikp1-HMA (SNK-EKE) / AVR-PikF)
-# receptor: chain A  |  effector: chain B  (standardised by extract_benchmark_complexes.py)
+# Tier 1: HMA integrated domain / MAX effector complexes
+# Run 1 — model comparison (7QZD)
+# =============================================================================
+# All 13 variants are TEMPLATE-FREE. No structural information from the reference
+# complex reaches any prediction, so differences between variants are attributable
+# to the model and its MSA/restraint setting rather than to their inputs.
+#
+# AF2M and AF3 have --max_template_date pinned to 1900-01-01 in their modules,
+# which switches off their built-in PDB template searches. Left at their
+# defaults those searches retrieve benchmark complexes themselves.
+#
+#   sbatch run_benchmark.slurm.sh ./params.yml
 # =============================================================================
 
 project_name: "7QZD_benchmark"

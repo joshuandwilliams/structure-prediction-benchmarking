@@ -1,0 +1,36 @@
+# =============================================================================
+# Tier 1: HMA integrated domain / MAX effector complexes
+# Run 1 — model comparison (Tier 1, 8B2R)
+# =============================================================================
+# All 13 arms are TEMPLATE-FREE. No structural information from the reference
+# complex reaches any prediction, so differences between arms are attributable
+# to the model and its MSA/restraint setting rather than to their inputs.
+#
+# AF2M and AF3 have --max_template_date pinned to 1900-01-01 in their modules,
+# which switches off their built-in PDB template searches. Left at their
+# defaults those searches retrieve benchmark complexes themselves.
+#
+#   sbatch run_benchmark.slurm.sh ./params.yml
+# =============================================================================
+
+project_name: "8B2R_benchmark"
+outdir:       "./8B2R_benchmark_results"
+
+reference_pdb:   "./8B2R.pdb"
+receptor_chain:  "A"
+effector_chain:  "B"
+
+models:
+  - boltz1
+  - boltz1_msa
+  - boltz1_constrained
+  - boltz2
+  - boltz2_msa
+  - boltz2_constrained
+  - chai1
+  - af2m
+  - af3
+  - af3_nomsa
+  - colabfold
+  - colabfold_nomsa
+  - esmfold2
