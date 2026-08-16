@@ -24,6 +24,8 @@
 #   bash scripts/run_benchmarks.sh --tiers 1 --params params_template.yml # Run 2
 #   bash scripts/run_benchmarks.sh --tiers 1 -j 4
 #   bash scripts/run_benchmarks.sh --tiers 1 --pdbs 6G10   # one target only
+#   bash scripts/run_benchmarks.sh --tiers 1 --params params_template.yml \
+#       --after 12345                                      # chain Run 2 after Run 1
 #   bash scripts/run_benchmarks.sh --tiers 1 --list    # preview, submit nothing
 #   bash scripts/run_benchmarks.sh --tiers 1 --include-complete
 #
@@ -119,6 +121,7 @@ PARAMS="params.yml"
 LIST_ONLY=0
 INCLUDE_COMPLETE=0
 ONLY_PDBS=""
+AFTER_JOB=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -126,6 +129,7 @@ while [[ $# -gt 0 ]]; do
         --tiers)            TIERS="$2"; shift 2 ;;
         --params)           PARAMS="$2"; shift 2 ;;
         --pdbs)             ONLY_PDBS="$2"; shift 2 ;;
+        --after)            AFTER_JOB="$2"; shift 2 ;;
         --list|--dry)       LIST_ONLY=1; shift ;;
         --include-complete) INCLUDE_COMPLETE=1; shift ;;
         -h|--help)          sed -n '2,50p' "$0"; exit 0 ;;
@@ -215,7 +219,19 @@ N="${#TODO[@]}"
 
 # Re-submit this same file as the array task. SLURM_ARRAY_TASK_ID will be set
 # in those jobs, so the branch at the top takes the array path.
+# Run 2 launches Nextflow in the SAME target directories as Run 1, so the two
+# cannot overlap: they would share work/ and .nextflow and corrupt each other.
+# --after chains this submission behind an earlier job id. afterany rather than
+# afterok, because a target that fails in Run 1 should not block Run 2 on the
+# other seventeen.
+DEP=()
+if [ -n "${AFTER_JOB}" ]; then
+    DEP=(--dependency="afterany:${AFTER_JOB}")
+    echo "Chained: starts after job ${AFTER_JOB} finishes."
+fi
+
 jobid="$(sbatch --parsable \
+    "${DEP[@]+"${DEP[@]}"}" \
     --array="0-$((N - 1))%${MAX_CONCURRENT}" \
     --output="${STATE_DIR}/nf_%A_%a.out" \
     --error="${STATE_DIR}/nf_%A_%a.err" \
