@@ -1,7 +1,7 @@
 # Analysis environment for structure-prediction-benchmarking.
 #
 # This is the environment the Quarto documents under
-# analysis/structure_prediction_benchmark/ render in, and the one the helper
+# analysis/ render in, and the one the helper
 # scripts in bin/ are run under off-cluster. It does NOT contain any structure
 # predictor: Boltz-1/2, Chai-1, ColabFold and ESMFold2 run inside the
 # Singularity images built from containers/*.def, and AlphaFold2-Multimer and
@@ -9,7 +9,7 @@
 #
 #   mamba env create -f environment.yml
 #   mamba activate spb-analysis
-#   cd analysis/structure_prediction_benchmark && quarto render
+#   cd analysis && quarto render
 #
 # Versions are pinned exactly so a re-render reproduces the committed figures.
 # Note that matplotlib decides figure extents from font metrics, so a different
@@ -20,13 +20,15 @@ name: spb-analysis
 
 channels:
   - conda-forge
+  - bioconda
 
 dependencies:
   - python=3.11.15
 
-  # Core analysis stack. Every .qmd uses these through _common.py.
+  # Core analysis stack. Every .qmd uses these through bin/_analysis_common.py.
   - numpy=2.4.6
   - pandas=3.0.5
+  - scipy=1.17.1
   - matplotlib-base=3.11.1
 
   # Structure parsing. biopython is used by analyses 9 and 10; gemmi is used by
@@ -36,6 +38,7 @@ dependencies:
 
   # bin/validate_boltz_yaml.py and the Boltz input writers.
   - pyyaml=6.0.3
+  - emboss=6.6.0        # needle, for compute_reference_similarity.py
 
   # Quarto's python engine.
   - ipykernel=7.3.0
@@ -45,6 +48,7 @@ dependencies:
 
   # Repo tooling (see [tool.pytest.ini_options] / [tool.ruff] in pyproject.toml).
   - pytest=9.1.1
+  - pytest-cov=7.0.0
   - ruff=0.16.2
 
   - pip

@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 930" width="1120" height="930" font-family="Arial, Helvetica, sans-serif">
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333333"/>
+    </marker>
+    <marker id="arrowamb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b8860b"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="930" fill="#ffffff"/>
+
+  <!-- ─────────────────────────── Legend ─────────────────────────── -->
+  <g font-size="12" fill="#333333">
+    <rect x="30" y="18" width="1060" height="38" fill="#fbfbfb" stroke="#cccccc" stroke-width="1" rx="6"/>
+    <rect x="44" y="30" width="14" height="14" fill="#ffffff" stroke="#111111"/>
+    <text x="66" y="41">Input or output</text>
+    <rect x="190" y="30" width="14" height="14" fill="#eaf5ea" stroke="#4c8c4a"/>
+    <text x="212" y="41">Shared stage, runs once</text>
+    <rect x="392" y="30" width="14" height="14" fill="#e3f0fd" stroke="#3477b5"/>
+    <text x="414" y="41">Predictor variant</text>
+    <rect x="546" y="30" width="14" height="14" fill="#f3ecf9" stroke="#7a4fa3"/>
+    <text x="568" y="41">Metrics</text>
+    <line x1="650" y1="37" x2="690" y2="37" stroke="#b8860b" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="698" y="41">Derived from the reference complex</text>
+  </g>
+
+  <!-- ─────────────────────────── Input ──────────────────────────── -->
+  <rect x="350" y="76" width="400" height="58" rx="8" fill="#ffffff" stroke="#111111" stroke-width="2"/>
+  <text x="550" y="100" text-anchor="middle" font-size="15" font-weight="bold" fill="#111111">reference.pdb</text>
+  <text x="550" y="121" text-anchor="middle" font-size="12" fill="#111111">18 two-chain receptor&#8211;effector complexes</text>
+
+  <line x1="550" y1="134" x2="550" y2="168" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ───────────────────── EXTRACT_SEQUENCES ────────────────────── -->
+  <rect x="390" y="170" width="320" height="50" rx="8" fill="#eaf5ea" stroke="#4c8c4a" stroke-width="2"/>
+  <text x="550" y="192" text-anchor="middle" font-size="13" font-weight="bold" fill="#24491f">EXTRACT_SEQUENCES</text>
+  <text x="550" y="210" text-anchor="middle" font-size="11" fill="#24491f">receptor and effector FASTA</text>
+
+  <!-- One trunk down from the sequences, then three drops. -->
+  <line x1="550" y1="220" x2="550" y2="240" stroke="#333333" stroke-width="2"/>
+  <line x1="360" y1="240" x2="640" y2="240" stroke="#333333" stroke-width="2"/>
+  <line x1="360" y1="240" x2="360" y2="260" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="640" y1="240" x2="640" y2="260" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="500" y1="240" x2="500" y2="366" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="508" y="356" font-size="11" fill="#666666">sequences to every variant</text>
+
+  <!-- ─────────────────── Shared preparation stages ──────────────── -->
+  <rect x="250" y="262" width="220" height="54" rx="8" fill="#eaf5ea" stroke="#4c8c4a" stroke-width="2"/>
+  <text x="360" y="284" text-anchor="middle" font-size="12" font-weight="bold" fill="#24491f">COLABFOLD_SEARCH</text>
+  <text x="360" y="303" text-anchor="middle" font-size="10" fill="#24491f">one MSA, reused by 3 variants</text>
+
+  <rect x="530" y="262" width="220" height="54" rx="8" fill="#eaf5ea" stroke="#4c8c4a" stroke-width="2"/>
+  <text x="640" y="284" text-anchor="middle" font-size="12" font-weight="bold" fill="#24491f">AF3_SETUP_DB</text>
+  <text x="640" y="303" text-anchor="middle" font-size="10" fill="#24491f">databases for 2 variants</text>
+
+  <!-- shared stages -> only the variants that consume them -->
+  <path d="M 360 316 L 360 340 L 424 340 L 424 394" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M 640 316 L 640 340 L 803 340 L 803 486 L 789 486" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- reference -> restraints -->
+  <path d="M 750 120 L 930 120 L 930 394" fill="none" stroke="#b8860b" stroke-width="2"
+        stroke-dasharray="6 4" marker-end="url(#arrowamb)"/>
+
+  <!-- ───────────────────── Predictor variants ───────────────────── -->
+  <rect x="40" y="370" width="1020" height="230" rx="10" fill="#f5faff" stroke="#b9d4ea"
+        stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="285" y="388" text-anchor="middle" font-size="11" fill="#3d5871">13 predictor variants, 25 predictions each from 5 seeds &#215; 5 samples</text>
+
+  <!-- Column 1 -->
+  <rect x="56" y="398" width="229" height="188" rx="8" fill="#e3f0fd" stroke="#3477b5" stroke-width="2"/>
+  <text x="170" y="418" text-anchor="middle" font-size="12" font-weight="bold" fill="#12395f">Single sequence</text>
+  <g font-size="11" fill="#12395f">
+    <rect x="68" y="428" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="170" y="445" text-anchor="middle">boltz1</text>
+    <rect x="68" y="458" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="170" y="475" text-anchor="middle">boltz2</text>
+    <rect x="68" y="488" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="170" y="505" text-anchor="middle">chai1</text>
+    <rect x="68" y="518" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="170" y="535" text-anchor="middle">colabfold_nomsa</text>
+    <rect x="68" y="548" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="170" y="565" text-anchor="middle" font-size="10">esmfold2 (1 sample per seed)</text>
+  </g>
+
+  <!-- Column 2 -->
+  <rect x="309" y="398" width="229" height="188" rx="8" fill="#e3f0fd" stroke="#3477b5" stroke-width="2"/>
+  <text x="424" y="418" text-anchor="middle" font-size="12" font-weight="bold" fill="#12395f">Shared ColabFold MSA</text>
+  <g font-size="11" fill="#12395f">
+    <rect x="321" y="428" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="424" y="445" text-anchor="middle">boltz1_msa</text>
+    <rect x="321" y="458" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="424" y="475" text-anchor="middle">boltz2_msa</text>
+    <rect x="321" y="488" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="424" y="505" text-anchor="middle">colabfold</text>
+  </g>
+
+  <!-- Column 3 -->
+  <rect x="562" y="398" width="229" height="188" rx="8" fill="#e3f0fd" stroke="#3477b5" stroke-width="2"/>
+  <text x="676" y="418" text-anchor="middle" font-size="12" font-weight="bold" fill="#12395f">Own MSA search</text>
+  <g font-size="11" fill="#12395f">
+    <rect x="574" y="428" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="676" y="445" text-anchor="middle">af2m</text>
+    <rect x="568" y="452" width="217" height="68" rx="6" fill="none" stroke="#4c8c4a"
+          stroke-width="1.5" stroke-dasharray="5 3"/>
+    <rect x="574" y="458" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="676" y="475" text-anchor="middle">af3</text>
+    <rect x="574" y="488" width="205" height="26" rx="4" fill="#ffffff" stroke="#3477b5"/>
+    <text x="676" y="505" text-anchor="middle">af3_nomsa</text>
+  </g>
+  <text x="676" y="542" text-anchor="middle" font-size="10" fill="#3d5871">af2m searches its own databases</text>
+
+  <!-- Column 4 -->
+  <rect x="815" y="398" width="229" height="188" rx="8" fill="#e3f0fd" stroke="#b8860b" stroke-width="2"/>
+  <text x="930" y="418" text-anchor="middle" font-size="12" font-weight="bold" fill="#5a4300">Reference restraints</text>
+  <g font-size="11" fill="#12395f">
+    <rect x="827" y="428" width="205" height="26" rx="4" fill="#ffffff" stroke="#b8860b"/>
+    <text x="930" y="445" text-anchor="middle">boltz1_constrained</text>
+    <rect x="827" y="458" width="205" height="26" rx="4" fill="#ffffff" stroke="#b8860b"/>
+    <text x="930" y="475" text-anchor="middle">boltz2_constrained</text>
+  </g>
+  <text x="930" y="507" text-anchor="middle" font-size="10" fill="#5a4300">Positive control, not a method.</text>
+  <text x="930" y="521" text-anchor="middle" font-size="10" fill="#5a4300">The restraints come from the answer.</text>
+
+  <!-- ─────────────── Variants -> metrics, and -> the trace ───────── -->
+  <line x1="550" y1="600" x2="550" y2="638" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="940" y1="600" x2="940" y2="638" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="948" y="626" font-size="10" fill="#666666">timing of every process</text>
+
+  <!-- ───────────────────── COMPUTE_METRICS ──────────────────────── -->
+  <rect x="350" y="640" width="400" height="64" rx="8" fill="#f3ecf9" stroke="#7a4fa3" stroke-width="2"/>
+  <text x="550" y="663" text-anchor="middle" font-size="13" font-weight="bold" fill="#3d2357">COMPUTE_METRICS</text>
+  <text x="550" y="682" text-anchor="middle" font-size="11" fill="#3d2357">ra_eff, pLDDT, pTM, ipTM, ipSAE, ranking score</text>
+  <text x="550" y="698" text-anchor="middle" font-size="11" fill="#3d2357">measured against the reference, not between predictions</text>
+
+  <rect x="820" y="640" width="240" height="64" rx="8" fill="#ffffff" stroke="#111111" stroke-width="2"/>
+  <text x="940" y="668" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">trace.txt</text>
+  <text x="940" y="687" text-anchor="middle" font-size="11" fill="#111111">Nextflow execution trace</text>
+
+  <!-- reference -> metrics, down the far right and clear of every box -->
+  <path d="M 350 105 L 18 105 L 18 672 L 348 672" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="12" y="380" font-size="11" fill="#333333" transform="rotate(-90 12 380)" text-anchor="middle">reference as ground truth</text>
+
+  <!-- ──────────────────── AGGREGATE / RUNTIME ───────────────────── -->
+  <line x1="550" y1="704" x2="550" y2="742" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="940" y1="704" x2="940" y2="742" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="390" y="744" width="320" height="56" rx="8" fill="#f3ecf9" stroke="#7a4fa3" stroke-width="2"/>
+  <text x="550" y="767" text-anchor="middle" font-size="13" font-weight="bold" fill="#3d2357">AGGREGATE_RESULTS</text>
+  <text x="550" y="786" text-anchor="middle" font-size="11" fill="#3d2357">best model per variant, by confidence</text>
+
+  <rect x="820" y="744" width="240" height="56" rx="8" fill="#f3ecf9" stroke="#7a4fa3" stroke-width="2"/>
+  <text x="940" y="766" text-anchor="middle" font-size="11" font-weight="bold" fill="#3d2357">predictor_runtime_stats.csv</text>
+  <text x="940" y="785" text-anchor="middle" font-size="10" fill="#3d2357">compare standalone_elapsed_s</text>
+
+  <!-- ─────────────────────────── Output ─────────────────────────── -->
+  <line x1="550" y1="800" x2="550" y2="838" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="350" y="840" width="400" height="58" rx="8" fill="#ffffff" stroke="#111111" stroke-width="2"/>
+  <text x="550" y="864" text-anchor="middle" font-size="13" font-weight="bold" fill="#111111">all_metrics.csv, best_models/</text>
+  <text x="550" y="885" text-anchor="middle" font-size="11" fill="#111111">per-target results</text>
+
+</svg>

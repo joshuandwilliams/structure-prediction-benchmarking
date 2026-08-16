@@ -35,6 +35,10 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+coverage.xml
+lcov.info
+htmlcov/
 
 # Virtual environments
 .venv/
@@ -113,6 +117,9 @@ rsync_deletions*.txt
 # ----- Quarto render artifacts (figures/ PNGs+SVGs are committed separately) -----
 *_files/
 analysis/**/*.html
+
+# ----- Editor / assistant local state -----
+.claude/
 
 # ----- OS / misc -----
 Thumbs.db
