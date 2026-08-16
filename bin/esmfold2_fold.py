@@ -105,6 +105,15 @@ def main():   # pragma: no cover - needs a GPU and the esm package
     with open(cif_path, "w") as f:
         f.write(result.complex.to_mmcif())
 
+    # Also write a PDB. The mmCIF the esm library emits omits columns that
+    # gemmi 0.6.5 needs, and it silently returns zero models rather than
+    # raising, so the metrics container could not read these structures at all.
+    # PDB is unambiguous across both gemmi versions, and the chains here are far
+    # too short to hit any PDB format limit.
+    pdb_path = os.path.join(args.out_dir, "esmfold2_pred.pdb")
+    with open(pdb_path, "w") as f:
+        f.write(result.complex.to_pdb_string())
+
     conf = build_confidences(
         result.plddt,
         ptm=getattr(result, "ptm", None),

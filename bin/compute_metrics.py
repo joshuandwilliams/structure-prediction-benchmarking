@@ -1094,8 +1094,14 @@ def parse_esmfold2(pred_dir, chain_lengths):
 
     modules/esmfold2.nf writes, per seed, into the aggregated staging tree:
 
-        all_outputs/<seed_tag>/esmfold2_pred.cif      predicted complex (mmCIF)
+        all_outputs/<seed_tag>/esmfold2_pred.pdb      predicted complex (PDB)
+        all_outputs/<seed_tag>/esmfold2_pred.cif      the same complex as mmCIF
         all_outputs/<seed_tag>/confidences.json       {plddt:[0-100], ptm, iptm?, pae?}
+
+    The PDB is preferred where present. The mmCIF the esm library writes omits
+    columns gemmi 0.6.5 requires, and that version returns zero models for it
+    rather than raising, so the metrics container cannot read the mmCIF at all.
+    Older runs predate the PDB, so the mmCIF remains the fallback.
 
     pLDDT is already rescaled to 0-100 by bin/esmfold2_fold.py. ipTM / PAE are
     present only if the model exposes them; when absent, the interface metrics
@@ -1107,6 +1113,12 @@ def parse_esmfold2(pred_dir, chain_lengths):
 
     cif_files = sorted(glob.glob(os.path.join(pred_dir, "**", "*.cif"), recursive=True))
     cif_files = [p for p in cif_files if not _is_reference(p)]
+
+    # Swap in the sibling PDB wherever one exists.
+    cif_files = [
+        (p[:-4] + ".pdb") if os.path.isfile(p[:-4] + ".pdb") else p
+        for p in cif_files
+    ]
 
     for cif_path in cif_files:
         base = os.path.dirname(cif_path)

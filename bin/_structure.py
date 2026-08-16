@@ -36,6 +36,15 @@ def read_chains(path, chains=None):
     """
     import gemmi
     st = gemmi.read_structure(str(path))
+
+    # A file gemmi cannot make sense of yields zero models rather than raising,
+    # and indexing st[0] then throws IndexError. Callers already handle "no
+    # chains found", so degrade to that instead of taking the whole run down.
+    # gemmi 0.6.5 hits this on the minimal mmCIF the esm library writes, which
+    # 0.7.5 reads without complaint.
+    if len(st) == 0:
+        return {}
+
     st.remove_waters()
 
     wanted = set(chains) if chains is not None else None

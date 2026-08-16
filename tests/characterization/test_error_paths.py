@@ -45,6 +45,17 @@ def test_read_chains_returns_empty_for_a_file_with_no_protein(tmp_path):
     assert S.read_chains(p) == {}
 
 
+def test_read_chains_returns_empty_when_gemmi_finds_no_models(tmp_path):
+    """gemmi yields a structure with zero models for a file it cannot make
+    sense of, rather than raising, so indexing st[0] threw IndexError and took
+    the whole benchmark process down. This is not hypothetical: gemmi 0.6.5 in
+    the metrics container does exactly that with the mmCIF the esm library
+    writes, which crashed METRICS_ESMFOLD2 on a live run."""
+    p = tmp_path / "nomodels.cif"
+    p.write_text("data_empty\n#\n_entry.id empty\n#\n")
+    assert S.read_chains(p) == {}
+
+
 def test_kabsch_handles_empty_input():
     rmsd, R, t, n = S.kabsch(np.zeros((0, 3)), np.zeros((0, 3)))
     assert n == 0 and np.isnan(rmsd)
