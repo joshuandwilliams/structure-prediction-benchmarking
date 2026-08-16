@@ -2,7 +2,7 @@
 
 [![Tests](https://github.com/joshuandwilliams/structure-prediction-benchmarking/actions/workflows/test.yml/badge.svg)](https://github.com/joshuandwilliams/structure-prediction-benchmarking/actions/workflows/test.yml)
 [![Lint](https://github.com/joshuandwilliams/structure-prediction-benchmarking/actions/workflows/lint.yml/badge.svg)](https://github.com/joshuandwilliams/structure-prediction-benchmarking/actions/workflows/lint.yml)
-![tests](https://img.shields.io/badge/tests-307%20passing-brightgreen) ![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen) ![python](https://img.shields.io/badge/python-3.11-blue) ![nextflow](https://img.shields.io/badge/nextflow-25.10.4-blue) ![status](https://img.shields.io/badge/status-awaiting%20re--run-orange)
+![tests](https://img.shields.io/badge/tests-312%20passing-brightgreen) ![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen) ![python](https://img.shields.io/badge/python-3.11-blue) ![nextflow](https://img.shields.io/badge/nextflow-25.10.4-blue) ![status](https://img.shields.io/badge/status-awaiting%20re--run-orange)
 
 A Nextflow DSL2 pipeline that benchmarks deep-learning protein complex structure predictors against solved reference complexes. Given a two-chain reference PDB it runs each predictor across five seeds, scores how accurately the effector is placed on the receptor, and produces one ranked table plus each predictor's best model.
 

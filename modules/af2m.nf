@@ -53,7 +53,11 @@ EOF
     DATA_DIR="${params.af2_data_dir}"
     mkdir -p output
 
-    source package ${params.af2_package_id}
+    # Sourced by absolute path. `source` resolves its argument against PATH,
+    # and /nbi/software/production/bin is only on PATH in a login shell, so a
+    # bare `source package` fails whenever the run was submitted from a
+    # non-interactive shell.
+    source /nbi/software/production/bin/package ${params.af2_package_id}
 
     echo "Running AF2-Multimer prediction (with MSA)..."
 

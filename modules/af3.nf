@@ -108,7 +108,11 @@ process AF3 {
             "${receptor_seq}" "${effector_seq}" full \\
             --output input.json
 
-    source package ${params.af3_package_id}
+    # Sourced by absolute path. `source` resolves its argument against PATH,
+    # and /nbi/software/production/bin is only on PATH in a login shell, so a
+    # bare `source package` fails whenever the run was submitted from a
+    # non-interactive shell.
+    source /nbi/software/production/bin/package ${params.af3_package_id}
 
     echo "Running AlphaFold 3 prediction..."
 
@@ -160,7 +164,11 @@ process AF3_NOMSA {
             "${receptor_seq}" "${effector_seq}" nomsa \\
             --output input.json
 
-    source package ${params.af3_package_id}
+    # Sourced by absolute path. `source` resolves its argument against PATH,
+    # and /nbi/software/production/bin is only on PATH in a login shell, so a
+    # bare `source package` fails whenever the run was submitted from a
+    # non-interactive shell.
+    source /nbi/software/production/bin/package ${params.af3_package_id}
 
     echo "Running AlphaFold 3 prediction (no MSA, inference only)..."
 

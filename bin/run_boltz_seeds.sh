@@ -21,6 +21,10 @@ SEEDS=(42 123 456 789 1024)
 
 run_seed() {
     local seed="$1" out_dir="$2"
+    # `local x="$1"` reads the positional parameters but does not consume them,
+    # so without this shift the "$@" below still starts with the seed and the
+    # output directory and boltz predict rejects them as extra arguments.
+    shift 2
 
     singularity exec --nv \
         --bind "${PWD}:${PWD}" \
@@ -40,7 +44,10 @@ run_seed() {
             "$@"
 
     local n_pdb
-    n_pdb=$(find "${out_dir}" -name "*.pdb" 2>/dev/null | wc -l)
+    # `|| n_pdb=0` matters: if boltz wrote no directory at all, find exits
+    # non-zero and pipefail would abort here, losing the message below and
+    # leaving only a bare exit status to debug.
+    n_pdb=$(find "${out_dir}" -name "*.pdb" 2>/dev/null | wc -l) || n_pdb=0
     if [ "${n_pdb}" -eq 0 ]; then
         echo "ERROR: seed ${seed} produced no PDB files, boltz skipped the input." >&2
         exit 1
