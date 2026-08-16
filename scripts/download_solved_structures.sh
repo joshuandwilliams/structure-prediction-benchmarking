@@ -19,9 +19,9 @@
 
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIST="${HERE}/all_nlr_pdbs.txt"
-OUT="${HERE}/solved_NLR_structures"
+DATA="$(cd "$(dirname "${BASH_SOURCE[0]}")/../data" && pwd)"
+LIST="${DATA}/all_nlr_pdbs.txt"
+OUT="${DATA}/solved_NLR_structures"
 BASE="https://files.rcsb.org/download"
 
 mkdir -p "${OUT}"

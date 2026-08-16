@@ -1,32 +1,12 @@
 #!/usr/bin/env python3
-"""
-strip_heteroatoms.py
---------------------
-Remove non-polymer records (HETATM) and supplementary records (ANISOU, CONECT)
-from the two-chain reference PDBs in complexes_for_benchmarking/.
+"""Remove HETATM, ANISOU and CONECT records from the reference PDBs.
 
-Why
-===
-The references are extracted from experimental structures that carry
-crystallisation additives, ions, and cofactors (HOH, SO4, EDO, ADP, ATP, ZN,
-CL, MN, CA, MPD, …) on the receptor/target chains. Those heteroatoms break
-downstream tools — notably the negative-steering engine's effector-template
-extraction, which fails with `_atom_site.label_seq_id is '.'` when a HETATM
-(e.g. SO4) sits in the effector chain. Only the protein matters for the
-benchmark (sequence, fold, interface, RMSD), so we strip the rest.
+Waters, ions and cofactors are not part of the complex being scored, and the
+structure-negative-steering engine fails on heteroatoms in the effector chain.
+No modified residues are present in this set, so no polymer is lost.
 
-Safety
-======
-None of the benchmark PDBs contain modified amino acids (no MSE etc.) — every
-HETATM is a water/additive/ion/cofactor — so removing all HETATM never deletes
-a polymer residue. The script asserts the chain-A and chain-B Cα counts are
-unchanged before overwriting each file.
-
-This is invoked automatically by extract_benchmark_complexes.py after it writes
-each complex, and can also be run standalone:
-
-    python strip_heteroatoms.py                      # clean complexes_for_benchmarking/
-    python strip_heteroatoms.py path/to/file.pdb …   # clean specific files
+Called automatically by extract_benchmark_complexes.py, and runnable standalone
+to re-clean existing files.
 """
 
 from __future__ import annotations
@@ -35,8 +15,8 @@ import glob
 import os
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DIR = os.path.join(HERE, "complexes_for_benchmarking")
+DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+DEFAULT_DIR = os.path.join(DATA, "complexes_for_benchmarking")
 
 _DROP_PREFIXES = ("HETATM", "ANISOU", "CONECT")
 

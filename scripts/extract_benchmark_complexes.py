@@ -1,30 +1,19 @@
 #!/usr/bin/env python3
-"""
-extract_benchmark_complexes.py
-------------------------------
-Build two-chain binder-target reference complexes for the benchmark.
+"""Build the two-chain reference complexes for the benchmark.
 
-Reads data/benchmark_complexes.tsv. For each entry it loads the downloaded
-structure from solved_NLR_structures/ (.cif preferred, .pdb fallback), chooses
-the receptor-chain / target-chain pair in closest contact (so a multi-copy
-crystal still yields a genuinely bound pair), relabels:
+Reads benchmark_complexes.tsv. For each entry it loads the downloaded structure
+from solved_NLR_structures/ (.cif preferred), picks the receptor and target
+chain pair with the most Cα contacts so a multi-copy crystal still yields a
+genuinely bound pair, relabels receptor to A and target to B, strips
+heteroatoms, and writes complexes_for_benchmarking/<PDB>.pdb.
 
-    receptor -> chain A      (always the PLANT protein)
-    target   -> chain B      (always the PATHOGEN effector)
+Chain A is always the plant protein and chain B always the pathogen effector,
+which lets one params template drive every target.
 
-and writes a clean 2-chain PDB to complexes_for_benchmarking/<PDB>.pdb.
-
-The A = plant / B = pathogen convention is uniform across all tiers. For Tier-3
-effector/host-target complexes the plant host protein is still chain A even
-though biologically the effector is the "binder" there — uniform labelling
-keeps every benchmark case trackable and lets one params.yml
-(receptor_chain: A, effector_chain: B) drive them all.
-
-Requires gemmi:  pip install gemmi   (or run inside the benchmark container).
+Needs gemmi.
 
 Usage:
-    python extract_benchmark_complexes.py            # all entries in the manifest
-    python extract_benchmark_complexes.py 6G10 9QLV  # only these PDB IDs
+    extract_benchmark_complexes.py [PDB_ID ...]
 """
 
 from __future__ import annotations
@@ -34,13 +23,12 @@ import os
 import sys
 
 import gemmi
-
 import strip_heteroatoms
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "solved_NLR_structures")
-OUT = os.path.join(HERE, "complexes_for_benchmarking")
-MANIFEST = os.path.join(HERE, "benchmark_complexes.tsv")
+DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+SRC = os.path.join(DATA, "solved_NLR_structures")
+OUT = os.path.join(DATA, "complexes_for_benchmarking")
+MANIFEST = os.path.join(DATA, "benchmark_complexes.tsv")
 CONTACT_CUTOFF = 8.0  # Å, Cα–Cα
 
 
@@ -73,8 +61,10 @@ def count_contacts(ca_a, ca_b, cutoff=CONTACT_CUTOFF):
 
 
 def pick_bound_pair(model, rec_chains, tgt_chains):
-    """Return ((rec_name, tgt_name), n_contacts) for the receptor/target chain
-    pair with the most Cα–Cα contacts, or (None, 0) if no chains are found."""
+    """Pick the receptor and target chain pair with the most Cα contacts.
+
+    Returns ((rec_name, tgt_name), n_contacts), or (None, 0) if none found.
+    """
     wanted = set(rec_chains) | set(tgt_chains)
     ca = {ch.name: ca_positions(ch) for ch in model if ch.name in wanted}
     best, best_n = None, -1
@@ -88,7 +78,7 @@ def pick_bound_pair(model, rec_chains, tgt_chains):
 
 
 def build_two_chain(st, rec_name, tgt_name):
-    """New Structure containing only rec_name -> A and tgt_name -> B."""
+    """Build a Structure holding only rec_name as A and tgt_name as B."""
     model = st[0]
     new = gemmi.Structure()
     new.name = st.name
