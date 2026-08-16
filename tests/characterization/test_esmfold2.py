@@ -48,15 +48,73 @@ def test_build_confidences_includes_2d_pae_only():
 
 # ── parse_esmfold2 ────────────────────────────────────────────────────────
 
-_MINIMAL_CIF = """\
-data_pred
+# A real gemmi-written mmCIF with two Cα atoms at B-factor 90 and 80.
+# Written by gemmi rather than hand-rolled, so it parses the way an
+# actual ESMFold2 output does.
+_MINIMAL_CIF = """data_pred
+_entry.id pred
+
+_cell.entry_id pred
+_cell.length_a 1
+_cell.length_b 1
+_cell.length_c 1
+_cell.angle_alpha 90
+_cell.angle_beta 90
+_cell.angle_gamma 90
+
+_symmetry.entry_id pred
+_symmetry.space_group_name_H-M ''
+
+loop_
+_entity.id
+_entity.type
+ALA! non-polymer
+GLY! non-polymer
+
+
+
+
+loop_
+_chem_comp.id
+_chem_comp.type
+ALA .
+GLY .
+
+loop_
+_struct_asym.id
+_struct_asym.entity_id
+Ax1 ALA!
+Bx1 GLY!
+
+
+
+loop_
+_atom_type.symbol
+C
+
+
 loop_
 _atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
 _atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
 _atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
 _atom_site.B_iso_or_equiv
-ATOM CA A 90.0
-ATOM CA B 80.0
+_atom_site.pdbx_formal_charge
+_atom_site.auth_seq_id
+_atom_site.auth_asym_id
+_atom_site.pdbx_PDB_model_num
+HETATM 1 C CA . ALA Ax1 ALA! . ? 0 0 0 1 90 ? 1 A 1
+HETATM 2 C CA . GLY Bx1 GLY! . ? 10 0 0 1 80 ? 1 B 1
 """
 
 
@@ -81,8 +139,8 @@ def test_parse_reads_confidences(tmp_path):
     assert r["avg_plddt"] == 85.0
     assert r["ptm"] == 0.6
     assert r["iptm"] == 0.4
-    # actifptm = 0.8*iptm + 0.2*ptm
-    assert r["actifptm"] == pytest.approx(0.8 * 0.4 + 0.2 * 0.6, abs=1e-4)
+    # ranking_score = 0.8*iptm + 0.2*ptm
+    assert r["ranking_score"] == pytest.approx(0.8 * 0.4 + 0.2 * 0.6, abs=1e-4)
     assert r["pdb_path"].endswith("esmfold2_pred.cif")
 
 
@@ -118,3 +176,36 @@ def test_parse_empty_dir_returns_nothing(tmp_path):
 
 def test_esmfold2_registered_in_parsers():
     assert cm.PARSERS["esmfold2"] is cm.parse_esmfold2
+
+
+# ── HPC tier: the fold itself ─────────────────────────────────────────────
+
+@pytest.mark.hpc
+def test_a_real_fold_writes_a_structure_and_confidences(tmp_path):
+    """The model-loading path needs a 40 GB GPU and the esm package, so it
+    cannot run on a laptop. Everything above tests the pure-Python parts
+    around it."""
+    pytest.importorskip("esm", reason="ESMFold2 fold needs the esm package")
+    pytest.importorskip("torch", reason="ESMFold2 fold needs torch")
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    spec = tmp_path / "input.json"
+    spec.write_text(json.dumps({
+        "receptor": {"id": "A", "sequence": "MKFLVAAALLLGAVSA"},
+        "effector": {"id": "B", "sequence": "GTALPPWWQDFAERLK"}}))
+
+    out = tmp_path / "seed42"
+    r = subprocess.run(
+        [sys.executable, str(repo / "bin" / "esmfold2_fold.py"),
+         "--input-json", str(spec), "--out-dir", str(out), "--seed", "42"],
+        capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (out / "esmfold2_pred.cif").is_file()
+
+    conf = json.loads((out / "confidences.json").read_text())
+    assert len(conf["plddt"]) > 0
+    assert max(conf["plddt"]) > 1.5     # rescaled to 0-100, not left as 0-1

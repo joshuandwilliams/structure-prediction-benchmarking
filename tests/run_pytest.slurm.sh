@@ -9,14 +9,19 @@
 #SBATCH --output=pytest_%j.out
 #SBATCH --error=pytest_%j.err
 
-# Run the Python test suite on the HPC, inside the lightweight pytest_runner
-# container (pytest + numpy + pandas). That covers the whole local_unit tier:
-# the numpy maths, the pure-Python helpers, and the extractor/FASTA CLIs (which
-# are pure stdlib). pytest_runner does NOT ship gemmi/biopython/PyYAML, so the
-# PyYAML-dependent validator tests skip cleanly (they importorskip "yaml").
+# Run the test suite on the HPC.
 #
-# A genuine `hpc`-tier run that parses real predictions with gemmi would need
-# the benchmark container instead — override CONTAINER below for that.
+# Three tiers, one marker each:
+#   local_unit         pure helpers on synthetic input, runs anywhere
+#   local_integration  reads the committed references and metrics
+#   hpc                needs a GPU, the containers, or a finished run
+#
+# The hpc tier reads published best_models/ trees, so run it after a benchmark.
+# Point it elsewhere with SPB_BENCHMARKS_DIR. Tests skip cleanly when their
+# inputs are absent rather than failing.
+#
+# Default marker is the full suite; override with MARKER, for example
+#   MARKER=hpc sbatch tests/run_pytest.slurm.sh
 #
 # Usage:
 #   sbatch tests/run_pytest.slurm.sh                 # full suite (yaml tests skip)

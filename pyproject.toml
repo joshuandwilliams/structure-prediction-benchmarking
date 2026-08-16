@@ -15,11 +15,13 @@ requires-python = ">=3.10"
 # bin/validate_boltz_yaml.py. numpy powers the ipSAE / RMSD maths.
 test = [
     "pytest>=7.0",
+    "pytest-cov>=4.0",
     "numpy>=1.24",
     "pandas>=2.0",
     "PyYAML>=6.0",
     "gemmi>=0.6",
     "biopython>=1.81",
+    "scipy>=1.11",
 ]
 experiments = [
     "numpy>=1.24",
@@ -32,12 +34,20 @@ experiments = [
 packages = []
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "--strict-markers -ra"
+testpaths = ["tests/characterization"]
+# Coverage runs on every invocation. lcov.info feeds editor gutter extensions,
+# htmlcov/ is the browsable report, and both are gitignored.
+addopts = """
+    --strict-markers -ra
+    --cov=bin
+    --cov-report=lcov:lcov.info
+    --cov-report=html
+    --cov-report=term-missing:skip-covered
+"""
 markers = [
-    "local_unit: tier — unit tests of pure helpers (ipSAE/RMSD maths, constraint extraction, FASTA/YAML parsing); <1s each; runs on a laptop.",
-    "local_integration: tier — pure-Python characterization on saved prediction fixtures; runs on Mac without HPC or GPU.",
-    "hpc: tier — requires a fresh pipeline run on the cluster (containers + GPU); HPC-only.",
+    "local_unit: tier - pure helpers on synthetic input; <1s each; runs anywhere with Python.",
+    "local_integration: tier - reads the committed references and metrics; runs on Mac without HPC.",
+    "hpc: tier - needs a GPU, the containers, or a fresh pipeline run; HPC-only.",
     "slow: long-running test.",
 ]
 
@@ -47,5 +57,46 @@ target-version = "py310"
 
 [tool.ruff.lint]
 # Pragmatic default set; bin/ scripts favour readability over strictness.
-select = ["E", "F", "W", "I"]
-ignore = ["E501"]  # long lines tolerated in metric tables / docstrings
+# D enforces PEP 257 on the docstrings that exist. D1xx (require a docstring
+# everywhere) is off deliberately: most helpers here read better undocumented
+# than with a restatement of their own name.
+select = ["E", "F", "W", "I", "D"]
+ignore = [
+    "E501",   # long lines tolerated in metric tables and docstrings
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+# matplotlib.use("Agg") has to run before pyplot is imported.
+"bin/classify_predicted_interface.py" = ["E402"]
+"bin/common_wrong_interface.py" = ["E402"]
+"bin/plot_metrics.py" = ["E402"]
+"bin/plot_training_set_membership.py" = ["E402"]
+
+[tool.coverage.run]
+source = ["bin"]
+
+[tool.coverage.report]
+# These two only run against published best_models/ trees, so they are covered
+# by the hpc tier rather than locally. Everything else must be tested or carry
+# an explicit pragma.
+omit = [
+    "bin/classify_predicted_interface.py",
+    "bin/common_wrong_interface.py",
+]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+skip_covered = true
+
+# Every line in bin/ is either exercised by a test or carries an explicit
+# pragma naming why it cannot be. A drop below this means new code arrived
+# without either.
+fail_under = 100
