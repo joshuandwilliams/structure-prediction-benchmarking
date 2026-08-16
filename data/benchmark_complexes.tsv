@@ -17,28 +17,3 @@ pdb	receptor_chains	target_chains	tier	system	description	deposition_date	in_af2
 9IP6	A,B,E	C,D	1	RGA5	RGA5-HMA8 / AVR1-CO39	2024-07-10	False	False
 9IMU	A	C	1	RGA5	RGA5-HMA8 / AVR-PikD	2024-07-04	False	False
 8B2R	A	B	1	RGA5	engineered RGA5-HMA mutant / AVR-PikF	2022-09-14	False	False
-7XVG	A	B	2	Sr35	Sr35 (CNL) / AvrSr35 binary complex	2022-05-23	False	False
-7CRB	A	J	2	RPP1	RPP1 LRR-C-JID / ATR1 (focused)	2020-08-13	False	True
-7JLU	A	B	2	ROQ1	ROQ1 LRR-C-JID / XopQ (focused)	2020-07-30	False	True
-7P8K	B	A	2	RRS1	RRS1-WRKY / AvrRps4	2021-07-23	False	True
-7B1I	B	C	3	Pik	OsHIPP19-HMA (host) / AVR-PikF	2020-11-24	False	True
-7NLJ	A	B	3	Pik-like	sHMA25 (host) / APikL2A	2021-02-22	False	True
-7NMM	A,B,C,D,E,F,G,H	I,J,K,L,M,N,O,P	3	Pik-like	sHMA94 (host) / APikL2F	2021-02-23	False	True
-9RSV	A	B	3	RGA5	OsHPP09-HMA (host) / AVR-Pia	2025-07-01	False	False
-8R7A	A	B	3	Pwl2	OsHIPP43-HMA (host) / Pwl2	2023-11-24	False	False
-8R7D	A,C	B,D	3	Pwl2	OsHIPP43-HMA (host) / Pwl2-SNDE	2023-11-24	False	False
-7PP2	A	B	3	Pii	Exo70F2 (host) / AVR-Pii	2021-09-13	False	True
-8PQ7	A,C	B,D	3	RxLR	PP1c (host) / Pi04134 (PexRD24)	2023-07-10	False	False
-8PFC	B,D,F,H,J,L,N,P	A,C,E,G,I,K,M,O	3	SAP	SPL5 (host) / SAP05	2023-06-15	False	False
-8PFD	B	A	3	SAP	Rpn10-vWA (host) / SAP05	2023-06-15	False	False
-9RDC	C,D	A,B	3	NRC3	NbTOL9a-ENTH (host) / AVRcap1b	2025-06-02	False	False
-8BV0	A,C	B,D	4	NRC1	NRC1 / SS15	2022-12-01	False	False
-9QWW	A,C	B,D	4	NRC2	NRC2a / SS15	2025-04-15	False	False
-9RIA	A,B,C	G	4	NRC3	NRC3 / AVRcap1b	2025-06-11	False	False
-7XC2	A,C,E,G,I	B,D,F,H,J	4	Sr35	Sr35 resistosome / AvrSr35 (pentamer)	2022-03-22	False	False
-7XX2	A,C,E,G,I	B	4	Sr35	Sr35 resistosome / AvrSr35 (variant)	2022-05-28	False	False
-7CRC	A,B,C,D	E,F,G,H	4	RPP1	RPP1 tetramer / ATR1 (full resistosome)	2020-08-13	False	True
-9QLV	A,B,C,D	P,Q,R,S	4	WRR4A	WRR4A tetramer / CCG40 (full resistosome)	2025-03-21	False	False
-9QT4	A,B,C,D	P,Q,R,S	4	WRR4A	WRR4A tetramer / CCG40 (focused refinement; dup of 9QLV)	2025-04-07	False	False
-9QU9	A,B,C,D	P,Q,R,S	4	WRR4A	WRR4A tetramer / CCG40 (C2 symmetry; dup of 9QLV)	2025-04-10	False	False
-9R8W	A,B,C,D	P,Q,R,S	4	WRR4A	WRR4A tetramer / CCG28 (weak binder)	2025-05-17	False	False

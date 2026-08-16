@@ -1,0 +1,511 @@
+---
+title: "10. Where does each effector sit on the HMA domain?"
+format:
+  html:
+    code-fold: true
+    toc: true
+    embed-resources: true
+jupyter: python3
+---
+
+The HMA domains superpose well onto each other, so all 18 references can be
+placed in one common frame. Where the effector binds can then be asked of the
+set as a whole rather than one structure at a time.
+
+Each complex's HMA (chain A) is superposed onto a single reference HMA with
+TM-align, and the transformation is applied to that complex's effector (chain
+B). Everything below is in the reference HMA's frame. Contacts are heavy-atom
+pairs within 5 Å. Each contacting HMA residue is mapped back to its
+reference-numbering equivalent through TM-align's own alignment, so the residue
+axis is comparable across all 18.
+
+Two questions, both answered at residue level rather than by summarising each
+effector to a point:
+
+1. Where the solved structures bind. Which reference HMA residues each
+   effector actually touches, and whether those sets fall into distinct groups.
+2. Where the predictions bind. The same contacts for predicted structures,
+   scored against the solved answer.
+
+```{python}
+import os
+import sys
+sys.path.insert(0, "../../bin")
+from _analysis_common import *
+
+import warnings
+warnings.filterwarnings("ignore")
+
+from Bio.PDB import PDBParser
+from Bio.Data.PDBData import protein_letters_3to1 as THREE_TO_ONE
+from tmtools import tm_align
+
+REFS = REPO_ROOT / "data" / "complexes_for_benchmarking"
+# Pikp1-HMA / AVR-PikD. Chosen for coverage, not convention: the residue axis is
+# this structure's numbering, and any contact on a residue it does not model is
+# silently dropped. Across the 18 complexes 6G10 loses 7 contacts (at most 2 in
+# any one complex) against 20 for 9IMU, 33 for 6Q76 and 54 for both 5A6W and
+# 7BNT. It is also a Pikp-1 HMA, so the axis is in the Pikp-1 full-length
+# numbering the Pik literature and the rest of this thesis use.
+REFERENCE = "6G10"
+CONTACT_CUTOFF = 5.0        # A, heavy atom to heavy atom
+
+manifest = pd.read_csv(MANIFEST, sep="\t")
+manifest = manifest[manifest["tier"] == TIER]
+PDBS = sorted(manifest["pdb"])
+DESC = dict(zip(manifest["pdb"], manifest["description"]))
+SYSTEM = dict(zip(manifest["pdb"], manifest["system"]))
+
+_parser = PDBParser(QUIET=True)
+
+
+def one_letter(res):
+    """One-letter code, or None. The lookup table is keyed differently across
+    Biopython versions, so try both forms rather than silently yielding '?'."""
+    n = res.get_resname()
+    return THREE_TO_ONE.get(n) or THREE_TO_ONE.get(n.capitalize())
+
+
+def residues(pdb, chain):
+    """Ordered standard residues of one chain that have a Cα."""
+    st = _parser.get_structure("x", REFS / f"{pdb}.pdb")
+    out = []
+    for res in st[0][chain]:
+        if res.id[0] != " " or "CA" not in res:
+            continue
+        aa = (THREE_TO_ONE.get(res.get_resname().capitalize())
+              or THREE_TO_ONE.get(res.get_resname()))
+        if aa is not None:
+            out.append(res)
+    return out
+
+
+def ca_and_seq(res_list):
+    return (np.array([r["CA"].coord for r in res_list], dtype=float),
+            "".join(THREE_TO_ONE.get(r.get_resname().capitalize())
+                    or THREE_TO_ONE.get(r.get_resname()) for r in res_list))
+
+
+def heavy_atoms(res):
+    return np.array([a.coord for a in res if a.element != "H"], dtype=float)
+
+
+def effector_name(pdb):
+    d = DESC.get(pdb, pdb)
+    return d.split(" / ")[1].strip() if " / " in d else d
+
+
+ref_res = residues(REFERENCE, "A")
+ref_ca, ref_seq = ca_and_seq(ref_res)
+ref_centre = ref_ca.mean(axis=0)
+# One-letter codes, so every residue can carry a tick and the axis reads as the
+# continuous stretch it is. 6G10 chain A is 187-262 with no breaks.
+REF_LABELS = [f"{one_letter(r)}{r.id[1]}" for r in ref_res]
+print(f"reference {REFERENCE} chain A: {len(ref_res)} residues")
+```
+
+```{python}
+def align_to_reference(pdb):
+    """Superpose this complex's HMA on the reference. Returns everything downstream needs."""
+    hma = residues(pdb, "A")
+    eff = residues(pdb, "B")
+    hx, hs = ca_and_seq(hma)
+    r = tm_align(hx, ref_ca, hs, ref_seq)
+    u, t = np.asarray(r.u), np.asarray(r.t)
+
+    # Verified convention: coords @ u.T + t maps chain 1 onto chain 2.
+    def move(x):
+        return x @ u.T + t
+
+    # Residue-index correspondence, this complex's HMA -> reference numbering.
+    mapping, i, j = {}, -1, -1
+    for x, y in zip(r.seqxA, r.seqyA):
+        if x != "-":
+            i += 1
+        if y != "-":
+            j += 1
+        if x != "-" and y != "-":
+            mapping[i] = j
+
+    # Contacts are computed on the original coordinates, so the superposition
+    # cannot influence them.
+    eff_atoms = np.vstack([heavy_atoms(e) for e in eff])
+    contacts = set()
+    for k, res in enumerate(hma):
+        ha = heavy_atoms(res)
+        d = np.linalg.norm(ha[:, None, :] - eff_atoms[None, :, :], axis=-1)
+        if d.min() <= CONTACT_CUTOFF:
+            if k in mapping:
+                contacts.add(mapping[k])
+
+    eff_ca = np.array([e["CA"].coord for e in eff], dtype=float)
+    return {
+        "pdb": pdb,
+        "effector": effector_name(pdb),
+        "system": SYSTEM.get(pdb, ""),
+        "tm_hma": max(r.tm_norm_chain1, r.tm_norm_chain2),
+        "eff_ca_moved": move(eff_ca),
+        "centroid": move(eff_ca).mean(axis=0),
+        "hma_ca_moved": move(hx),
+        "contacts": contacts,
+        "index_map": mapping,
+    }
+
+
+poses = [align_to_reference(p) for p in PDBS]
+info = pd.DataFrame([{k: v for k, v in p.items()
+                      if k in ("pdb", "effector", "system", "tm_hma")}
+                     for p in poses])
+print(f"HMA superposition TM range "
+      f"{info['tm_hma'].min():.2f}-{info['tm_hma'].max():.2f}")
+
+# Two interfaces fall out of the centroids on their own; label them by
+# splitting on the largest gap rather than by assuming which effector goes where.
+C = np.array([p["centroid"] for p in poses])
+D = np.linalg.norm(C[:, None, :] - C[None, :, :], axis=-1)
+seed = np.unravel_index(D.argmax(), D.shape)[0]
+far = D[seed] > D[seed].max() / 2
+for p, f in zip(poses, far):
+    p["site"] = "Site 2" if f else "Site 1"
+info["site"] = [p["site"] for p in poses]
+print(f"\nmaximum centroid separation {D.max():.1f} A")
+print(info.groupby(["site", "effector"]).size().to_string())
+```
+
+## 1. Which HMA residues does each effector touch?
+
+Contacts are mapped back to reference numbering, so the residue sets are
+directly comparable across all 18 complexes.
+
+```{python}
+# How separate are the two contact sets, in plain numbers?
+s1 = set().union(*[poses[k]["contacts"] for k in range(len(poses))
+                   if poses[k]["site"] == "Site 1"])
+s2 = set().union(*[poses[k]["contacts"] for k in range(len(poses))
+                   if poses[k]["site"] == "Site 2"])
+print(f"Site 1 touches {len(s1)} reference residues, "
+      f"Site 2 touches {len(s2)}, shared {len(s1 & s2)}")
+print(f"Site 1 only: {sorted(REF_LABELS[i] for i in s1 - s2)}")
+print(f"Site 2 only: {sorted(REF_LABELS[i] for i in s2 - s1)}")
+print(f"\ncentroid separation between site means: "
+      f"{np.linalg.norm(np.mean([p['centroid'] for p in poses if p['site'] == 'Site 1'], axis=0) - np.mean([p['centroid'] for p in poses if p['site'] == 'Site 2'], axis=0)):.1f} Å")
+info.sort_values(["site", "effector"]).reset_index(drop=True)
+```
+
+
+- The 18 references use two binding surfaces, not one, and they are on
+  opposite faces of the HMA.
+- Which surface is used tracks the effector, not the receptor. Every
+  AVR-Pik-family effector binds one face and AVR-Pia and AVR1-CO39 bind the
+  other, and this holds across both NLR families. The clearest case is
+  RGA5-HMA8, which appears twice: with AVR-PikD (9IMU) it sits at the AVR-Pik
+  site, and with AVR1-CO39 (9IP6) at the other, on the same receptor.
+- This is the geometric statement behind the wrong-interface failures elsewhere
+  in the benchmark. A predictor placing an AVR-Pik effector at the AVR-Pia site
+  has not produced a random pose, it has produced the other real one.
+
+Caveats. Everything is expressed in one reference HMA's frame, so the residue
+axis is reference numbering and a residue absent from the reference cannot
+appear. Contacts use the deposited coordinates, so unmodelled side chains are
+invisible. The two sites are found by splitting on the largest centroid gap
+rather than assumed in advance, which suits this set but would need revisiting
+if a third surface appeared.
+
+The site split uses effector centroids, which are a lossy summary. 6Q76 sits
+about 5 Å from 5ZNG and 9IP6 while sharing most of their contacts, because the
+centre of mass moves with the effector's length and orientation even when the
+binding surface is the same. The contact sets above are the reliable statement
+of which surface is used.
+
+## 2. Where the predictions contact, against the solved structure
+
+The residue-level counterpart to `contact_composition_by_interface`. That
+figure reports the fraction of each interface class contacted, which answers
+which site but not which residues. This shows every contact as one of four
+states, so a prediction that finds the right site but the wrong patch is
+visible.
+
+Predicted receptors and effectors have the same chain identifiers and the same
+residue counts as their references, so the correspondence is one-to-one by index
+and nothing has to be inferred from an alignment.
+
+```{python}
+PRED = REPO_ROOT / "experiments" / "benchmarks"
+VARIANTS = [("boltz2_best", "Boltz-2, no MSA"),
+        ("boltz2_constrained_best", "Boltz-2 + reference restraints")]
+
+
+def model_dir(pdb, variant_dir):
+    """Where a given variant's best model lives.
+
+    The constrained variants were re-run after their restraints were fixed, and the
+    corrected outputs live under ``rerun_constrained/``. The copy still sitting
+    in the main ``best_models/`` tree is byte-identical to the *unconstrained*
+    model, so reading the main tree for a constrained variant silently compares a
+    model against itself. Prefer the re-run, fall back only if it is absent.
+    """
+    if "constrained" in variant_dir:
+        rerun = (PRED / pdb / "rerun_constrained"
+                 / f"{pdb}_constrained_rerun_results" / "best_models" / variant_dir)
+        if rerun.is_dir():
+            return rerun
+    return PRED / pdb / f"{pdb}_benchmark_results" / "best_models" / variant_dir
+
+
+def kabsch(P_, Q):
+    """Rotation and translation putting P_ onto Q, both (n, 3) and paired."""
+    pc, qc = P_.mean(axis=0), Q.mean(axis=0)
+    H = (P_ - pc).T @ (Q - qc)
+    U, _, Vt = np.linalg.svd(H)
+    d = np.sign(np.linalg.det(Vt.T @ U.T))
+    R = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T
+    return R, qc - R @ pc
+
+
+def predicted_contacts(pdb, variant_dir):
+    """Contacts in reference numbering, plus receptor-aligned effector RMSD."""
+    path = model_dir(pdb, variant_dir)
+    if not path.is_dir():
+        return None
+    hits = [f for f in os.listdir(path) if f.endswith((".pdb", ".cif"))]
+    if not hits:
+        return None
+    st = _parser.get_structure("x", path / hits[0])
+
+    def keep(ch):
+        return [r for r in st[0][ch]
+                if r.id[0] == " " and "CA" in r
+                and (THREE_TO_ONE.get(r.get_resname().capitalize())
+                     or THREE_TO_ONE.get(r.get_resname()))]
+
+    p_hma, p_eff = keep("A"), keep("B")
+    t_hma, t_eff = residues(pdb, "A"), residues(pdb, "B")
+    if len(p_hma) != len(t_hma) or len(p_eff) != len(t_eff):
+        return None
+
+    # ra_eff: superpose on the receptor, then measure the effector.
+    R, t = kabsch(np.array([r["CA"].coord for r in p_hma], dtype=float),
+                  np.array([r["CA"].coord for r in t_hma], dtype=float))
+    pe = np.array([r["CA"].coord for r in p_eff], dtype=float) @ R.T + t
+    te = np.array([r["CA"].coord for r in t_eff], dtype=float)
+    ra_eff = float(np.sqrt(((pe - te) ** 2).sum(axis=1).mean()))
+
+    # Contacts, in this complex's own indexing, then mapped to the reference.
+    ea = np.vstack([heavy_atoms(e) for e in p_eff])
+    own = set()
+    for k, res in enumerate(p_hma):
+        ha = heavy_atoms(res)
+        if np.linalg.norm(ha[:, None, :] - ea[None, :, :], axis=-1).min() <= CONTACT_CUTOFF:
+            own.add(k)
+    mapping = POSE_BY_PDB[pdb]["index_map"]
+    return {"contacts": {mapping[k] for k in own if k in mapping}, "ra_eff": ra_eff}
+
+
+POSE_BY_PDB = {p["pdb"]: p for p in poses}
+
+pred = {}
+for pdb in PDBS:
+    for variant_dir, _ in VARIANTS:
+        r = predicted_contacts(pdb, variant_dir)
+        if r is not None:
+            pred[(pdb, variant_dir)] = r
+print(f"{len(pred)} predicted models loaded "
+      f"({len(PDBS)} targets x {len(VARIANTS)} variants)")
+```
+
+```{python}
+from matplotlib.colors import ListedColormap
+
+# 0 neither, 1 solved only (missed), 2 predicted only (spurious), 3 both.
+STATE_CMAP = ListedColormap(["#F2F2F2", "#4C72B0", "#C44E52", "#2E7D32"])
+STATE_LABEL = ["no contact", "solved only (missed)",
+               "predicted only (spurious)", "both (recovered)"]
+
+# Rows fall into three blocks, so the unrestrained panel reads top to bottom as
+# a story: complexes that genuinely bind the AVR-Pia surface, then AVR-Pik
+# complexes wrongly placed there, then AVR-Pik complexes placed correctly.
+# The blocks are defined on the unrestrained variant, deliberately, since that is
+# the panel the grouping is meant to explain. The restrained panel keeps the
+# same row order so the two can be read against each other.
+PIA_SITE = set().union(*[POSE_BY_PDB[p]["contacts"] for p in PDBS
+                         if POSE_BY_PDB[p]["site"] == "Site 1"])
+
+
+def jaccard(a, b):
+    return len(a & b) / len(a | b) if (a | b) else 0.0
+
+
+def row_block(pdb):
+    """0 = truly at the AVR-Pia site, 1 = wrongly placed there, 2 = correct."""
+    if POSE_BY_PDB[pdb]["site"] == "Site 1":
+        return 0
+    got = pred[(pdb, "boltz2_best")]["contacts"]
+    return 1 if jaccard(got, PIA_SITE) > jaccard(got, POSE_BY_PDB[pdb]["contacts"]) else 2
+
+
+BLOCK_LABEL = {0: "binds the AVR-Pia surface",
+               1: "AVR-Pik effector misplaced at the AVR-Pia surface",
+               2: "AVR-Pik effector placed at its own surface"}
+
+REF_ROW_COLOR = "#3B3B6D"
+
+
+def reference_interfaces(subset):
+    """Consensus contact sets for the two surfaces, from the solved structures.
+
+    The AVR-Pia surface is represented by the complexes that genuinely bind it,
+    of which the Pik-only set has exactly one (6Q76), so no consensus rule is
+    needed. The AVR-Pik surface has many, so it takes any residue contacted in
+    more than half of them.
+    """
+    pia = [p for p in subset if POSE_BY_PDB[p]["site"] == "Site 1"]
+    pik = [p for p in subset if POSE_BY_PDB[p]["site"] == "Site 2"]
+    pia_set = set().union(*[POSE_BY_PDB[p]["contacts"] for p in pia]) if pia else set()
+    counts = {}
+    for p in pik:
+        for c in POSE_BY_PDB[p]["contacts"]:
+            counts[c] = counts.get(c, 0) + 1
+    pik_set = {c for c, n in counts.items() if n > len(pik) / 2}
+    return [(f"AVR-Pia interface (n={len(pia)})", pia_set),
+            (f"AVR-Pik interface (>50% of {len(pik)})", pik_set)]
+
+
+def contact_state_figure(subset, name, height):
+    """The stacked contact map, for whichever complexes are passed in."""
+    # Within a block, worst first, so the misplaced block reads as a gradient.
+    order = sorted(subset, key=lambda p: (row_block(p),
+                                          -pred[(p, "boltz2_best")]["ra_eff"], p))
+    blocks = [row_block(p) for p in order]
+    print(f"{name}: "
+          + str({BLOCK_LABEL[b]: blocks.count(b) for b in sorted(set(blocks))}))
+
+    refs = reference_interfaces(subset)
+    used = sorted(set().union(*[POSE_BY_PDB[p]["contacts"] for p in subset],
+                              *[pred[(p, a)]["contacts"]
+                                for p in subset for a, _ in VARIANTS]))
+    lo, hi = min(used), max(used)
+    cols = list(range(lo, hi + 1))
+
+    n = len(order)
+    fig, all_axes = plt.subplots(
+        3, 1, figsize=(13.0, height), sharex=True,
+        gridspec_kw={"height_ratios": [len(refs) / n * 1.9, 1, 1],
+                     "hspace": 0.13})
+
+    # The solved interfaces, as their own box above the predictions.
+    ax0 = all_axes[0]
+    R = np.array([[1.0 if c in s else 0.0 for c in cols] for _, s in refs])
+    ax0.imshow(np.ma.masked_where(R == 0, R), cmap=ListedColormap([REF_ROW_COLOR]),
+               aspect="auto", extent=[lo, hi + 1, len(refs), 0],
+               interpolation="nearest")
+    ax0.set_yticks(np.arange(len(refs)) + 0.5)
+    ax0.set_yticklabels([lab for lab, _ in refs], fontsize=8)
+    ax0.set_xticks(np.arange(lo, hi + 2), minor=True)
+    ax0.set_yticks(np.arange(len(refs) + 1), minor=True)
+    ax0.grid(which="minor", color="white", lw=0.5)
+    ax0.tick_params(which="minor", length=0)
+    ax0.set_facecolor("#F2F2F2")
+    ax0.set_title("Solved interfaces", fontsize=12, pad=6)
+
+    axes = all_axes[1:]
+    for ax, (variant_dir, variant_title) in zip(axes, VARIANTS):
+        M = np.zeros((len(order), len(cols)))
+        for row, pdb in enumerate(order):
+            true_c = POSE_BY_PDB[pdb]["contacts"]
+            got = pred.get((pdb, variant_dir), {}).get("contacts", set())
+            for ci, c in enumerate(cols):
+                M[row, ci] = (3 if (c in true_c and c in got)
+                              else 1 if c in true_c
+                              else 2 if c in got else 0)
+        ax.imshow(M, cmap=STATE_CMAP, vmin=0, vmax=3, aspect="auto",
+                  extent=[lo, hi + 1, len(order), 0], interpolation="nearest")
+        ax.set_xticks(np.arange(lo, hi + 2), minor=True)
+        ax.set_yticks(np.arange(len(order) + 1), minor=True)
+        ax.grid(which="minor", color="white", lw=0.5)
+        ax.tick_params(which="minor", length=0)
+        ax.set_title(variant_title, fontsize=12, pad=6)
+        # Each panel carries its own variant's RMSD, so the rows can be read alone.
+        ax.set_yticks(np.arange(len(order)) + 0.5)
+        ax.set_yticklabels(
+            [f"{p}  ({pred[(p, variant_dir)]['ra_eff']:.1f} Å)" for p in order],
+            fontsize=8)
+
+    axes[-1].set_xticks(np.arange(lo, hi + 1) + 0.5)
+    axes[-1].set_xticklabels([REF_LABELS[i] for i in range(lo, hi + 1)],
+                             rotation=90, fontsize=7)
+    axes[-1].set_xlabel(f"Residue of the reference HMA ({REFERENCE} numbering)")
+
+    handles = [plt.Rectangle((0, 0), 1, 1, fc=STATE_CMAP(i), ec="black", lw=0.4)
+               for i in range(4)]
+    fig.legend(handles, STATE_LABEL, loc="lower center", ncol=4, frameon=True,
+               fontsize=9.5, bbox_to_anchor=(0.5, -0.005))
+    fig.tight_layout(rect=[0, 0.03, 1, 1])
+    save_fig(fig, name)
+    plt.show()
+
+
+PIK = [p for p in PDBS if SYSTEM.get(p) == "Pik"]
+RGA5 = [p for p in PDBS if SYSTEM.get(p) != "Pik"]
+print(f"{len(PIK)} Pik, {len(RGA5)} RGA5 ({', '.join(RGA5)})")
+
+contact_state_figure(PDBS, "predicted_vs_solved_contacts", 15.0)
+```
+
+```{python}
+rows = []
+for pdb in PDBS:
+    t = POSE_BY_PDB[pdb]["contacts"]
+    for variant_dir, variant_title in VARIANTS:
+        g = pred[(pdb, variant_dir)]["contacts"]
+        rows.append({
+            "pdb": pdb, "effector": POSE_BY_PDB[pdb]["effector"],
+            "variant": variant_title,
+            "ra_eff": round(pred[(pdb, variant_dir)]["ra_eff"], 2),
+            "recovered": len(t & g), "missed": len(t - g),
+            "spurious": len(g - t),
+            "jaccard": round(len(t & g) / len(t | g), 2) if (t | g) else np.nan,
+        })
+cc = pd.DataFrame(rows)
+print(cc.groupby("variant")[["recovered", "missed", "spurious", "jaccard"]]
+        .median().round(2).to_string())
+cc
+```
+
+### The same thing, Pik only
+
+The 18 mix three separate stories and only one is the point. Dropping the four
+RGA5 entries leaves 13 complexes that should sit at the AVR-Pik surface, plus
+6Q76, which defines the other one.
+
+The RGA5 rows are what complicate the full version. AVR1-CO39 genuinely binds
+the AVR-Pia surface, so 5ZNG and 9IP6 look like the AVR-Pia rows without being
+about interface choice at all. 9IMU is a third case again, an AVR-Pik effector
+on an RGA5 domain that Boltz-2 puts nowhere near either surface. None of that is
+the claim being made here, so it is separated out below rather than explained
+away in a caption.
+
+```{python}
+contact_state_figure(PIK, "predicted_vs_solved_contacts_pik", 12.8)
+```
+
+
+- Every failure in the Pik set is the same failure. The AVR-Pik effector is
+  placed on the AVR-Pia surface, which shows as red through R203–V216 with
+  matching blue at E253–K262.
+- 6Q76 is the control at the top. Its effector belongs on that surface and
+  Boltz-2 puts it there, so the surface itself is not hard to predict.
+- Restraints move contacts onto the true patch rather than merely improving the
+  global RMSD. Compare the red and green blocks between the two panels.
+- A prediction can sit at the right site and still contact the wrong residues,
+  which the fraction-based view cannot separate from a clean hit.
+
+```{python}
+# The four RGA5 entries, kept apart because they are three different stories.
+print(pd.DataFrame([{
+    "pdb": p, "effector": POSE_BY_PDB[p]["effector"],
+    "true site": POSE_BY_PDB[p]["site"],
+    "ra_eff no MSA": round(pred[(p, "boltz2_best")]["ra_eff"], 1),
+    "ra_eff restrained": round(pred[(p, "boltz2_constrained_best")]["ra_eff"], 1),
+    "block": BLOCK_LABEL[row_block(p)],
+} for p in RGA5]).to_string(index=False))
+```

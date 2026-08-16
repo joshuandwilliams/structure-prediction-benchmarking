@@ -1,0 +1,134 @@
+---
+title: "1. How accurately do the models pose the effector?"
+format:
+  html:
+    code-fold: true
+    toc: true
+    embed-resources: true
+jupyter: python3
+---
+
+Scored on `ra_eff`, the receptor-aligned effector RMSD, with < 5 Å counting as
+correctly posed. Each variant contributes one prediction per target. That is its
+own most confident of 25 (5 seeds x 5 diffusion samples), selected on mean pLDDT
+without reference to the answer.
+
+```{python}
+import sys
+sys.path.insert(0, "../../bin")
+from _analysis_common import *
+
+d = load()
+df, combos = d["df"], d["combos"]
+```
+
+## Accuracy per model
+
+```{python}
+xs, n_no = block_positions(combos)
+series = {c: df[(df["msa"] == c[0]) & (df["model"] == c[1])][RA_COL].values
+          for c in combos}
+
+fig, ax = plt.subplots(figsize=(max(11, 0.75 * len(combos) + 3), 6.4))
+bp = ax.boxplot([series[c] for c in combos], positions=xs, widths=0.6,
+                patch_artist=True, showfliers=False,
+                medianprops=dict(color="black"))
+
+rng = np.random.default_rng(0)
+for patch, x, (flag, model) in zip(bp["boxes"], xs, combos):
+    patch.set_facecolor(NO_MSA_COLOR if flag == "no_msa" else MSA_COLOR)
+    patch.set_alpha(0.55)
+    if is_oracle(model):
+        patch.set_hatch("///")
+        patch.set_edgecolor("black")
+    y = series[(flag, model)]
+    ax.scatter(x + rng.uniform(-0.15, 0.15, len(y)), y, s=14, color="black",
+               alpha=0.45, zorder=3)
+
+ax.axhline(RA_EFF_THRESHOLD, ls="--", color="grey", lw=1)
+ax.axvline(n_no, color="lightgrey", lw=1)
+ax.set_yscale("log")
+readable_log(ax.yaxis, RA_TICKS)
+ax.set_ylabel("Receptor-aligned effector RMSD (Å, log scale)")
+ax.set_xticks(xs)
+ax.set_xticklabels([pretty(m) for _, m in combos], rotation=45, ha="right",
+                   fontsize=9)
+
+top = ax.get_ylim()[1]
+for x, c in zip(xs, combos):
+    ax.text(x, top * 1.15, f"{int((series[c] < RA_EFF_THRESHOLD).sum())}/{len(series[c])}",
+            ha="center", va="bottom", fontsize=9)
+ax.set_ylim(ax.get_ylim()[0], top * 1.8)
+
+handles = [plt.Rectangle((0, 0), 1, 1, fc=c, alpha=0.55, ec="black")
+           for c in (NO_MSA_COLOR, MSA_COLOR)]
+handles.append(plt.Rectangle((0, 0), 1, 1, fc="white", ec="black", hatch="///"))
+ax.legend(handles, ["No MSA", "MSA", "restraints from\nthe reference"],
+          loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=True, fontsize=9)
+save_fig(fig, "pose_accuracy_by_model", thesis=True)
+plt.show()
+
+pd.DataFrame([
+    {"model": DISPLAY.get(m, m), "msa": MSA_LABEL[f], "n": len(series[(f, m)]),
+     "median ra_eff": round(float(np.median(series[(f, m)])), 2),
+     "n correct": int((series[(f, m)] < RA_EFF_THRESHOLD).sum()),
+     "% correct": round(100 * (series[(f, m)] < RA_EFF_THRESHOLD).mean(), 1)}
+    for f, m in combos]).sort_values("median ra_eff").reset_index(drop=True)
+```
+
+- The MSA setting is the largest single driver of accuracy. The MSA block sits
+  well below the no-MSA block on both median and count.
+- The hatched variants are not predictors. Their restraints are derived from the
+  reference complex, so they cannot be run on a novel target. They measure how
+  far a model can be driven towards an interface it is told about, and should be
+  read as a positive control rather than part of the ranking.
+- Boltz-2 responds to correct restraints far more than Boltz-1 does, which is
+  why it is the model negative steering is built on.
+- Pairs of references encoding the same complex disagree by a wide margin on
+  this benchmark, so small differences between variants are not differences in
+  capability.
+
+## Which targets are hard?
+
+```{python}
+per_pdb = (df.assign(ok=df[RA_COL] < RA_EFF_THRESHOLD)
+             .groupby(["system", "pdb"])["ok"].sum().astype(int).reset_index())
+
+# Pik and RGA5 as separate blocks, each ordered easiest first.
+xs, heights, labels, colours, bounds, cursor = [], [], [], [], [], 0.0
+for system in ["Pik", "RGA5"]:
+    blk = per_pdb[per_pdb["system"] == system].sort_values("ok", ascending=False)
+    start = cursor
+    for _, r in blk.iterrows():
+        xs.append(cursor); heights.append(int(r["ok"])); labels.append(r["pdb"])
+        colours.append(SYS_COLORS[system]); cursor += 1
+    bounds.append((system, start, cursor - 1)); cursor += 1.2
+
+fig, ax = plt.subplots(figsize=(max(10, 0.55 * len(xs) + 3), 6))
+ax.bar(xs, heights, width=0.85, color=colours, edgecolor="black", linewidth=0.8)
+for x, h in zip(xs, heights):
+    ax.text(x, h + 0.15, str(h), ha="center", va="bottom", fontsize=8)
+
+band_lo, band_hi = len(combos) + 0.9, len(combos) + 2.0
+for system, xa, xb in bounds:
+    ax.add_patch(plt.Rectangle((xa - 0.46, band_lo), (xb - xa) + 0.92,
+                               band_hi - band_lo, facecolor=SYS_COLORS[system],
+                               alpha=0.30, edgecolor="black", linewidth=0.8))
+    ax.text((xa + xb) / 2, (band_lo + band_hi) / 2, system, ha="center",
+            va="center", fontsize=11, fontweight="bold")
+ax.set_xticks(xs)
+ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+ax.set_ylabel(f"Variants with receptor-aligned effector\nRMSD < {RA_EFF_THRESHOLD:g} Å")
+ax.set_ylim(0, band_hi + 0.4)
+save_fig(fig, "per_target_difficulty")
+plt.show()
+
+per_pdb.groupby("system")["ok"].agg(["count", "mean", "median", "min", "max"]).round(1)
+```
+
+- No target is solved by every variant, and difficulty is far from uniform.
+- RGA5 is markedly harder than Pik, so the aggregate medians above are carried
+  by the Pik targets.
+- The benchmark set is homogeneous by construction, being 18 HMA/MAX-effector
+  complexes from two NLR families, so none of this generalises to NLR-effector
+  prediction at large.

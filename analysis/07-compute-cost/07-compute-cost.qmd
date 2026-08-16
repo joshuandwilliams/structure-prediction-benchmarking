@@ -1,0 +1,116 @@
+---
+title: "7. What does each model cost to run?"
+format:
+  html:
+    code-fold: true
+    toc: true
+    embed-resources: true
+jupyter: python3
+---
+
+A run is 5 seeds x 5 diffusion samples, so 25 predictions, for every variant
+except ESMFold2, which produces 5. Comparing per run therefore flatters
+ESMFold2. The per-prediction column is the fair comparison.
+
+```{python}
+import sys
+sys.path.insert(0, "../../bin")
+from _analysis_common import *
+
+d = load()
+rt = d["rt"]
+```
+
+## Runtime against memory
+
+```{python}
+med = (rt.groupby(["model", "msa"])
+         .agg(runtime=("elapsed_min", "median"), memory=("peak_rss_gb", "median"))
+         .reset_index())
+
+fig, ax = plt.subplots(figsize=(8.4, 6.4))
+for flag, col, lab, z in [("no_msa", NO_MSA_COLOR, "No MSA", 4),
+                          ("msa", MSA_COLOR, "MSA", 3)]:
+    sub = med[med["msa"] == flag]
+    ax.scatter(sub["runtime"], sub["memory"], s=90, color=col, alpha=0.65,
+               edgecolor="black", linewidth=0.6, label=lab, zorder=z)
+
+LABEL_LEFT = {("af2m", "msa"), ("esmfold2", "no_msa"), ("boltz1", "no_msa"),
+              ("boltz2", "no_msa"), ("colabfold", "no_msa")}
+for _, r in med.iterrows():
+    key = (r["model"], r["msa"])
+    name = DISPLAY.get(r["model"], r["model"])
+    left = key in LABEL_LEFT
+    ax.annotate(name, (r["runtime"], r["memory"]), fontsize=7.5,
+                xytext=(-8 if left else 8, 0), textcoords="offset points",
+                ha="right" if left else "left", va="center", zorder=5)
+ax.set_xscale("log")
+readable_log(ax.xaxis, TIME_TICKS)
+ax.set_xlabel("Median wall-clock per run (minutes, log scale)")
+ax.set_ylabel("Median peak resident memory (GB)")
+ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=True, fontsize=10)
+save_fig(fig, "runtime_vs_peak_memory")
+plt.show()
+```
+
+## Cost table
+
+```{python}
+N_PREDICTIONS = {"esmfold2": 5}      # every other variant runs 5 seeds x 5 samples
+cost = (rt.groupby(["model", "msa"])
+          .agg(n_targets=("elapsed_min", "size"),
+               mean_min=("elapsed_min", "mean"),
+               median_min=("elapsed_min", "median"),
+               min_min=("elapsed_min", "min"),
+               max_min=("elapsed_min", "max"),
+               mean_peak_rss_gb=("peak_rss_gb", "mean"))
+          .reset_index())
+cost["predictions"] = cost["model"].map(lambda m: N_PREDICTIONS.get(m, 25))
+cost["min_per_prediction"] = cost["mean_min"] / cost["predictions"]
+cost["combo"] = [combo_label(m, f) for m, f in zip(cost["model"], cost["msa"])]
+cost[["combo", "n_targets", "mean_min", "median_min", "min_min", "max_min",
+      "predictions", "min_per_prediction", "mean_peak_rss_gb"]].round(2) \
+    .sort_values("min_per_prediction").reset_index(drop=True)
+```
+
+- Cost spans two orders of magnitude. AlphaFold3 without an MSA is cheapest at
+  under two minutes. AlphaFold2-Multimer takes about two hours, almost all of it
+  in its own MSA search.
+- Per prediction, Boltz-2 costs roughly a quarter of ESMFold2 and a third of its
+  peak memory, despite the two looking comparable per run. Boltz-2 also varies
+  by seconds across targets where ESMFold2 varies by minutes.
+- Memory does not track runtime. ColabFold is among the slowest but the
+  lightest, and ESMFold2 is fast per run but the heaviest after
+  AlphaFold2-Multimer.
+
+## Throughput under a fixed memory budget
+
+How many predictions could a host with a given amount of RAM produce in one
+hour, assuming GPUs are not the constraint?
+
+```{python}
+MEM_GB = 1000.0
+tp = med.merge(cost[["model", "msa", "predictions"]], on=["model", "msa"])
+tp = tp[tp["msa"] == "no_msa"].copy()
+tp["parallel"] = np.floor(MEM_GB / tp["memory"]).astype(int)
+tp["runs_per_hour"] = 60.0 / tp["runtime"]
+tp["predictions_per_hour"] = (tp["parallel"] * tp["runs_per_hour"]
+                              * tp["predictions"]).round(0).astype(int)
+tp["model"] = tp["model"].map(lambda m: DISPLAY.get(m, m))
+tp[["model", "runtime", "memory", "parallel", "runs_per_hour", "predictions",
+    "predictions_per_hour"]].round(2).sort_values("predictions_per_hour",
+                                                  ascending=False).reset_index(drop=True)
+```
+
+- Under a memory cap the ranking changes again. ESMFold2 pays twice, being the
+  heaviest model so fewest instances fit, and returning 5 predictions per run
+  rather than 25.
+- Boltz-2 delivers several times the sampling per unit wall-clock at a third of
+  the memory, which is the practical case for using it in a no-MSA design
+  setting. It costs some accuracy against AlphaFold3 without an MSA.
+
+Caveats. `peak_rss_gb` is host RAM rather than GPU memory, and VRAM is usually
+the binding constraint in practice. The throughput table assumes perfect
+parallelism with no I/O contention. Queueing time is excluded, so these are
+execution times rather than time-to-result on a busy cluster. Runtimes cover 17
+of the 18 targets, since one run has no usable trace row.
