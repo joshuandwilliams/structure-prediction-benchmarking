@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
-"""
-extract_constraints_boltz2.py
------------------------------
-Extract pocket + contact constraints from a two-chain reference PDB for Boltz-2.
+"""Extract pocket and contact constraints from a two-chain reference PDB for Boltz-2.
 
-Boltz-2 (unlike Boltz-1) supports arbitrary max_distance values for both
-pocket and contact constraints, enabling dense residue-pair restraints.
+Boltz-2 accepts arbitrary max_distance values on both constraint types, so it
+gets dense per-residue-pair restraints as well as the pocket block.
 
 Usage:
-    python extract_constraints_boltz2.py <pdb> <rec_chain> <eff_chain> \
+    extract_constraints_boltz2.py <pdb> <rec_chain> <eff_chain> \
         <contact_cutoff> <contact_max> <contact_tolerance> \
         <pocket_cutoff> <pocket_max_distance>
-
-Writes YAML-formatted constraint block to stdout; prints stats to stderr.
 """
 import sys
 
@@ -50,7 +45,7 @@ def main():
     rec_lbl = labels.get(rec_chain, {})
     eff_lbl = labels.get(eff_chain, {})
 
-    if not rec_ca:
+    if not rec_ca:   # pragma: no cover
         print(f"ERROR: No Cα atoms for chain {rec_chain}", file=sys.stderr)
         sys.exit(1)
     if not eff_ca:

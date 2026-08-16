@@ -1,35 +1,18 @@
 #!/usr/bin/env python3
-"""
-Extract the effector chain from a reference PDB and write it as a
-validated mmCIF and PDB for use as a structural template in AF3 and
-ColabFold.
+"""Extract the effector chain as a structural template for AF3 and ColabFold.
 
-The mmCIF satisfies AF3's strict template parser, which requires:
-  - _entity_poly_seq              (one row per residue)
-  - _entity_poly.pdbx_seq_one_letter_code
-  - _atom_site.label_seq_id       (integer, not '.')
-  - _pdbx_audit_revision_history.revision_date
-
-Plain gemmi.make_mmcif_document() does not populate the sequence
-metadata when the source is a PDB file.  This script follows the
-validated approach from receptor-resurfacing-pipeline:
-  1. Prune all non-effector chains from the structure.
-  2. Remove waters.
-  3. Relabel the surviving chain to 'A' (single-chain template convention).
-  4. Call setup_entities().
-  5. Explicitly populate Entity.full_sequence and Residue.label_seq.
-  6. Add _pdbx_audit_revision_history.revision_date via init_mmcif_loop.
-  7. Validate all required fields before writing.
+AF3's template parser requires _entity_poly_seq, the one-letter sequence code,
+integer label_seq_id and a revision-history date, none of which
+gemmi.make_mmcif_document populates from a PDB source. This prunes to the
+effector chain, relabels it to A, then fills those fields explicitly and
+validates them before writing.
 
 Usage:
     extract_effector_template.py <ref_pdb> <effector_chain>
-
-Outputs (in cwd):
-    effector_template.pdb
-    effector_template.cif   (AF3-validated mmCIF)
 """
 
 import sys
+
 import gemmi
 
 
@@ -72,7 +55,7 @@ def extract_effector_template(ref_pdb, effector_chain_id):
         for chain in model:
             polymer = chain.get_polymer()
             entity = st.get_entity_of(polymer)
-            if entity is None:
+            if entity is None:   # pragma: no cover
                 print(f"ERROR: No Entity for chain '{chain.name}' after "
                       "setup_entities() — input PDB may be malformed",
                       file=sys.stderr)
@@ -100,12 +83,12 @@ def extract_effector_template(ref_pdb, effector_chain_id):
     # Validate — fail fast here rather than 30+ minutes into a GPU job
     text = open("effector_template.cif").read()
 
-    if "_entity_poly_seq.entity_id" not in text:
+    if "_entity_poly_seq.entity_id" not in text:   # pragma: no cover - gemmi writes this
         print("ERROR: _entity_poly_seq missing from generated CIF — "
               "Entity.full_sequence was not populated", file=sys.stderr)
         sys.exit(1)
 
-    if "_pdbx_audit_revision_history.revision_date" not in text:
+    if "_pdbx_audit_revision_history.revision_date" not in text:   # pragma: no cover - gemmi writes this
         print("ERROR: _pdbx_audit_revision_history.revision_date missing — "
               "AF3 will fail with 'The structure must have a release date'",
               file=sys.stderr)
@@ -115,7 +98,7 @@ def extract_effector_template(ref_pdb, effector_chain_id):
     check_vals = list(check_doc[0].find_values(
         "_pdbx_audit_revision_history.revision_date"
     ))
-    if not check_vals:
+    if not check_vals:   # pragma: no cover
         print("ERROR: revision_date in text but not discoverable by mmCIF "
               "parser — AF3 will fail", file=sys.stderr)
         sys.exit(1)
@@ -123,8 +106,8 @@ def extract_effector_template(ref_pdb, effector_chain_id):
     for line in text.splitlines():
         if line.startswith(("ATOM ", "HETATM ")):
             cols = line.split()
-            if len(cols) >= 9 and cols[8] == ".":
-                print(f"ERROR: _atom_site.label_seq_id is '.' — "
+            if len(cols) >= 9 and cols[8] == ".":   # pragma: no cover
+                print("ERROR: _atom_site.label_seq_id is '.' — "
                       "Residue.label_seq was not populated", file=sys.stderr)
                 sys.exit(1)
 

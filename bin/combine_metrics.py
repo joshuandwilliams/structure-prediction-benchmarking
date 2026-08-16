@@ -1,44 +1,12 @@
 #!/usr/bin/env python3
-"""
-Combine per-benchmark all_metrics.csv files into one summary CSV.
+"""Combine per-target all_metrics.csv files into one table.
 
-For every (model, msa, pdb) combination it keeps the single prediction with the
-HIGHEST avg_plddt — the model's own most confident structure — and carries
-through ALL of that prediction's metric columns so you can select whichever you
-want later.
+For each (model, msa, pdb) it keeps the prediction with the highest avg_plddt,
+the model's own most confident structure, and carries every metric column
+through. Selection must be reference-free: picking the lowest RMSD needs the
+answer and reports an oracle no pipeline can reach on a novel target.
 
-Why confidence and not the lowest ra_eff: selecting on ra_eff needs the solved
-structure, so it reports an oracle that no pipeline can reach on a novel target.
-The design pipeline this benchmark supports only ever acts on the structure Boltz
-ranks first by its own confidence (``model_0``), so confidence selection is what
-the models actually deliver. It is also the conventional top-1 benchmark
-convention. ``analysis/.../per_prediction_metrics.csv`` still holds every
-prediction if an oracle upper bound is wanted.
-
-Output columns:
-    model, msa, pdb, predictor, <every column from all_metrics.csv>
-
-  - model / msa / pdb are derived (see below).
-  - predictor is the original all_metrics.csv "model" column (the predictor
-    directory name, e.g. boltz1_msa), kept for traceability.
-  - all remaining all_metrics.csv columns (avg_plddt, ptm, iptm, the rmsd_*
-    family incl. the _core variants, ipsae_*, etc.) are passed through verbatim
-    from the chosen (highest-avg_plddt) prediction.
-
-Selection key = avg_plddt (highest wins). ra_eff is carried through, not used to select.
-
-The "model" column in all_metrics.csv is the predictor directory name; we split
-it into a base model + an msa flag ("msa" / "no_msa"):
-
-    af2m -> af2m/msa            af3 -> af3/msa          af3_nomsa -> af3/no_msa
-    boltz1 -> boltz1/no_msa     boltz1_msa -> boltz1/msa
-    boltz2 -> boltz2/no_msa     boltz2_msa -> boltz2/msa
-    boltz{1,2}_constrained -> kept as their own model, no_msa
-    chai1 -> chai1/no_msa       esmfold2 -> esmfold2/no_msa
-    colabfold -> colabfold/msa  colabfold_nomsa -> colabfold/no_msa
-
-Usage:
-    combine_metrics.py [--benchmarks-dir DIR] [--output FILE]
+The model column is split into a base model and an msa flag via MODEL_MAP.
 """
 
 import argparse
@@ -61,6 +29,12 @@ MODEL_MAP = {
     "colabfold":          ("colabfold",          "msa"),
     "colabfold_nomsa":    ("colabfold",          "no_msa"),
     "esmfold2":           ("esmfold2",           "no_msa"),
+    # Run 2: effector-template variants. These must be listed explicitly — the
+    # suffix heuristic below keys off a trailing _msa/_nomsa, so
+    # "boltz2_msa_template" would otherwise be mislabelled no_msa.
+    "boltz2_template":             ("boltz2_template",             "no_msa"),
+    "boltz2_msa_template":         ("boltz2_template",             "msa"),
+    "boltz2_constrained_template": ("boltz2_constrained_template", "no_msa"),
 }
 
 RA_EFF_COL = "rmsd_effector_receptor_aligned"   # carried through, not the selection key
@@ -119,7 +93,7 @@ def main():
 
     for pdb in sorted(os.listdir(bench_dir)):
         sub = os.path.join(bench_dir, pdb)
-        if not os.path.isdir(sub):
+        if not os.path.isdir(sub):   # pragma: no cover
             continue
         csv_path = os.path.join(sub, f"{pdb}_benchmark_results", "all_metrics.csv")
         if not os.path.isfile(csv_path):
@@ -134,9 +108,9 @@ def main():
             for row in reader:
                 n_rows += 1
                 raw_model = (row.get("model") or "").strip()
-                if not raw_model:
+                if not raw_model:   # pragma: no cover
                     continue
-                if raw_model not in MODEL_MAP:
+                if raw_model not in MODEL_MAP:   # pragma: no cover
                     unknown_models.add(raw_model)
                 model, msa = map_model(raw_model)
                 key = (model, msa, pdb)
@@ -149,7 +123,7 @@ def main():
                 if key not in best or score > best[key][0]:
                     best[key] = (score, dict(row))   # keep the whole prediction
 
-    if src_fieldnames is None:
+    if src_fieldnames is None:   # pragma: no cover
         src_fieldnames = []
 
     # Output header: derived cols + every source col, with the original "model"
@@ -179,7 +153,7 @@ def main():
     if missing:
         print(f"NOTE: {len(missing)} benchmark dir(s) had no all_metrics.csv: "
               f"{', '.join(missing)}")
-    if unknown_models:
+    if unknown_models:   # pragma: no cover
         print(f"NOTE: unrecognised model names (mapped by suffix heuristic): "
               f"{', '.join(sorted(unknown_models))}")
     only_unscored = sorted(k for k in no_score if k not in best)

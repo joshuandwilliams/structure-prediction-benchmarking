@@ -1,34 +1,21 @@
 #!/usr/bin/env python3
-"""
-Test whether a predictor's failed poses all land on the SAME wrong interface.
+"""Test whether a predictor's failed poses land on the same wrong interface.
 
-Motivating observation: for Boltz-2 without an MSA, most Pik-family targets fail
-at 19-27 A while 6Q76 (Pikp1-HMA / AVR-Pia) is solved to 0.6 A.  AVR-Pia is
-reported to engage a different surface of the HMA than the AVR-Pik effectors do.
-The hypothesis is that the model places the AVR-Pik effectors onto the AVR-Pia
-surface, i.e. it has one preferred binding mode that happens to be right for
-6Q76 and wrong for the rest.
+For Boltz-2 without an MSA most Pik targets fail at 19 to 27 Å while 6Q76
+(Pikp1-HMA with AVR-Pia) is solved to 0.6 Å. AVR-Pia engages a different HMA
+surface, so the hypothesis is that the model places AVR-Pik effectors there,
+giving one preferred binding mode that is right for 6Q76 and wrong for the rest.
 
-Method.  Every receptor here is a close homologue, so all structures can be put
-in one frame:
-
-  1. Pick a reference target (default 6Q76) and use its reference receptor as
-     the common frame.
-  2. For each target, superpose BOTH its reference receptor and its predicted
-     receptor onto that frame, using sequence-aligned Ca pairs, and carry the
-     respective effectors along with the transform.
-  3. In that shared frame, compare each predicted effector's centroid against
-     (a) its own true effector centroid and (b) the frame target's effector
-     centroid.
-
-If the hypothesis holds, failed targets sit far from (a) and close to (b), and
-their predicted effector centroids cluster tightly with each other.
+Every receptor is a close homologue, so all structures are put in one frame and
+each predicted effector centroid is compared against its own true position and
+against the AVR-Pia position.
 
 Usage:
-    test_common_wrong_interface.py --model boltz2 --msa no_msa --system Pik
+    common_wrong_interface.py --model boltz2 --msa no_msa --system Pik
 """
 
 import argparse
+import importlib.util
 import os
 import sys
 import warnings
@@ -36,76 +23,39 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import matplotlib
+
 matplotlib.use("Agg")
+import _structure
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-try:
-    from Bio import Align
-    from Bio.Align import substitution_matrices
-    from Bio.PDB import PDBParser
-    from Bio.PDB.Polypeptide import protein_letters_3to1
-except ImportError:
-    sys.exit("ERROR: biopython required.  pip install biopython")
+if importlib.util.find_spec("Bio") is None:
+    sys.exit("ERROR: biopython required. pip install biopython")
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PARSER = PDBParser(QUIET=True)
 
 
-def ca_and_seq(path, chain_id):
-    """Ca coordinates and one-letter sequence for one chain, in file order."""
-    st = PARSER.get_structure("x", path)
-    coords, seq = [], []
-    for res in st[0][chain_id]:
-        if "CA" not in res:
-            continue
-        try:
-            seq.append(protein_letters_3to1[res.get_resname()])
-        except KeyError:
-            continue
-        coords.append(res["CA"].get_coord())
-    return np.asarray(coords, float), "".join(seq)
+ca_and_seq = _structure.read_chain
 
 
 def aligner():
-    al = Align.PairwiseAligner()
-    al.substitution_matrix = substitution_matrices.load("BLOSUM62")
-    al.open_gap_score = -11
-    al.extend_gap_score = -1
-    al.mode = "global"
-    return al
+    return _structure.aligner()
 
 
 def matched_indices(al, seq_a, seq_b):
-    """Index pairs of aligned, non-gap positions between two sequences."""
-    aln = al.align(seq_a, seq_b)[0]
-    ia = ib = 0
-    pairs = []
-    for ca, cb in zip(aln[0], aln[1]):
-        if ca != "-" and cb != "-":
-            pairs.append((ia, ib))
-        if ca != "-":
-            ia += 1
-        if cb != "-":
-            ib += 1
-    return pairs
+    """Index pairs of aligned, non-gap positions. ``al`` is accepted and ignored."""
+    return list(zip(*_structure.matched_indices(seq_a, seq_b)))
 
 
 def kabsch(mobile, target):
-    """Rotation+translation mapping mobile onto target (equal-length arrays)."""
-    mc, tc = mobile.mean(0), target.mean(0)
-    cov = (mobile - mc).T @ (target - tc)
-    v, _, wt = np.linalg.svd(cov)
-    if np.linalg.det(v) * np.linalg.det(wt) < 0:
-        v[:, -1] *= -1
-    rot = v @ wt
-    return rot, tc - mc @ rot
+    """Rotation and translation mapping mobile onto target."""
+    _, R, t, _ = _structure.kabsch(mobile, target)
+    return R, t
 
 
 def apply_tf(coords, tf):
-    rot, tr = tf
-    return coords @ rot + tr
+    return _structure.apply_transform(coords, *tf)
 
 
 def main():
@@ -121,6 +71,9 @@ def main():
     ap.add_argument("--output", default="common_interface_test.csv")
     ap.add_argument("--plot-dir", default=None,
                     help="write the two diagnostic plots here")
+    ap.add_argument("--pred-dir", default=None,
+                    help="flat dir of <PDB>__<tag>.{pdb,cif} files to use "
+                         "instead of the published best_models/ trees")
     args = ap.parse_args()
 
     man = pd.read_csv(os.path.join(REPO, "data", "benchmark_complexes.tsv"), sep="\t")
@@ -145,6 +98,12 @@ def main():
     predictor_tag = tags[0]
 
     def pred_path(p):
+        if args.pred_dir:
+            for ext in (".pdb", ".cif"):
+                flat = os.path.join(args.pred_dir, f"{p}__{predictor_tag}{ext}")
+                if os.path.isfile(flat):
+                    return flat
+            return os.path.join(args.pred_dir, f"{p}__{predictor_tag}.pdb")
         return os.path.join(REPO, "experiments", "benchmarks", p,
                             f"{p}_benchmark_results", "best_models",
                             f"{predictor_tag}_best", f"{args.model}_best.pdb")

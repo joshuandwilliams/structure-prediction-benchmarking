@@ -1,33 +1,12 @@
 #!/usr/bin/env python3
-"""
-Plot how many benchmark structures fall inside each assessed model's training set.
+"""Plot how many benchmark structures fall inside each model's training set.
 
-A structure is counted as "in the training set" of a model when its PDB initial
-release date is on or before that model's published training-data cutoff date.
-(Release date, not deposit date: the AF/Boltz/Chai pipelines filter the PDB by
-release date, so a structure deposited before but released after the cutoff was
-NOT available for training.)
+A structure counts as exposed when its PDB initial release date is on or before
+the model's published training cutoff. Release date rather than deposit date,
+because the AlphaFold, Boltz and Chai pipelines filter the PDB by release.
 
-Per-model PDB training cutoffs (published; sources in MODEL_CUTOFFS below):
-    AF2-Multimer  2018-04-30      ColabFold     2018-04-30 (AF2 weights)
-    Chai-1        2021-01-12      AF3           2021-09-30
-    Boltz-1       2021-09-30      Boltz-2       2023-06-01
-    ESMFold2      2025-06-30  (Biohub ESMC-6B "cutoff2025" production model,
-                               NOT the original 2020 ESM-2 ESMFold)
-
-The plot is a stacked bar per model: the lower (red) segment is the number of
-benchmark structures released on/before the cutoff (potential train-set leakage),
-the upper (green) segment is the post-cutoff "clean" structures. Bars are ordered
-by cutoff date.
-
-PDB release dates are read from a cached CSV (default:
-experiments/analysis_results/pdb_release_dates.csv, columns pdb,release_date).
-Any benchmark PDB missing from the cache is fetched from the RCSB data API and
-appended, so the cache stays self-maintaining (needs network only for new PDBs).
-
-Usage:
-    plot_training_set_membership.py [--benchmarks-dir DIR] [--dates-csv FILE]
-                                    [--outdir DIR] [--assessed-only CSV]
+Release dates come from a cached CSV, with any missing PDB fetched from the RCSB
+API and appended.
 """
 
 import argparse
@@ -37,12 +16,12 @@ import os
 import sys
 import urllib.request
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
 
 # model -> (cutoff ISO date, one-line source). Cutoff = PDB *release* date filter.
 # Keys are the full display names (no abbreviations).
@@ -110,8 +89,7 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     repo = os.path.normpath(os.path.join(here, ".."))
     default_bench = os.path.join(repo, "experiments", "benchmarks")
-    default_dates = os.path.join(repo, "experiments", "analysis_results",
-                                 "pdb_release_dates.csv")
+    default_dates = os.path.join(repo, "data", "metrics", "pdb_release_dates.csv")
 
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -128,7 +106,7 @@ def main():
                          "in plots/)")
     args = ap.parse_args()
 
-    if not os.path.isdir(args.benchmarks_dir):
+    if not os.path.isdir(args.benchmarks_dir):   # pragma: no cover
         sys.exit(f"ERROR: benchmarks dir not found: {args.benchmarks_dir}")
     outdir = args.outdir or os.path.join(os.path.dirname(os.path.abspath(args.dates_csv)),
                                          "plots")
@@ -137,7 +115,7 @@ def main():
     pdbs = sorted(d for d in os.listdir(args.benchmarks_dir)
                   if os.path.isdir(os.path.join(args.benchmarks_dir, d)))
     scope = "all benchmark folders"
-    if args.assessed_only:
+    if args.assessed_only:   # pragma: no cover
         cm = pd.read_csv(args.assessed_only)
         assessed = set(cm["pdb"].astype(str))
         pdbs = [p for p in pdbs if p in assessed]
@@ -145,7 +123,7 @@ def main():
 
     dates = load_dates(args.dates_csv, pdbs)
     missing = [p for p in pdbs if p not in dates]
-    if missing:
+    if missing:   # pragma: no cover
         print(f"NOTE: no release date for {len(missing)} PDB(s), excluded: "
               f"{', '.join(missing)}", file=sys.stderr)
     rel = pd.Series({p: dates[p] for p in pdbs if p in dates})

@@ -1,30 +1,11 @@
 #!/usr/bin/env python3
-"""
-extract_sequences.py
---------------------
-Extract protein chain sequences from a PDB or mmCIF file.
+"""Extract chain sequences from a PDB or mmCIF as JSON.
+
+Also writes shell-sourceable CHAIN_A_SEQ / CHAIN_B_SEQ variables for the
+Nextflow processes that need them inline.
 
 Usage:
-    python extract_sequences.py INPUT_PDB [--output sequences.json]
-
-Output JSON:
-    {
-        "chains": [
-            {"id": "A", "sequence": "MKFL...", "length": 245},
-            {"id": "B", "sequence": "GTAL...", "length": 112}
-        ],
-        "chain_ids": ["A", "B"],
-        "multimer_fasta_header": ">A_and_B",
-        "multimer_fasta_sequence": "MKFL...:GTAL..."
-    }
-
-Also writes shell-sourceable variables to sequences.env:
-    CHAIN_A_SEQ="MKFL..."
-    CHAIN_B_SEQ="GTAL..."
-    CHAIN_A_LEN=245
-    CHAIN_B_LEN=112
-    ALL_CHAIN_IDS="A B"
-    NUM_CHAINS=2
+    extract_sequences.py INPUT [--output sequences.json] [--env sequences.env]
 """
 
 import argparse
@@ -32,99 +13,17 @@ import json
 import os
 import sys
 
-THREE_TO_ONE = {
-    "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
-    "GLN": "Q", "GLU": "E", "GLY": "G", "HIS": "H", "ILE": "I",
-    "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
-    "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
-    "SEC": "U", "PYL": "O",
-    # Non-standard → X
-    "MSE": "M", "HYP": "P", "TPO": "T", "SEP": "S", "PTR": "Y",
-}
-
-
-def extract_sequences_gemmi(path):
-    """Extract sequences using gemmi (preferred — handles PDB and mmCIF)."""
-    import gemmi
-    st = gemmi.read_structure(path)
-    st.setup_entities()
-
-    chains = []
-    seen = set()
-    for model in st:
-        for chain in model:
-            if chain.name in seen:
-                continue
-            seq = []
-            for res in chain.get_polymer():
-                one = THREE_TO_ONE.get(res.name, "X")
-                seq.append(one)
-            if seq:
-                seen.add(chain.name)
-                chains.append({
-                    "id": chain.name,
-                    "sequence": "".join(seq),
-                    "length": len(seq),
-                })
-        break  # first model only
-    return chains
-
-
-def extract_sequences_biopython(path):
-    """Fallback: extract sequences using BioPython."""
-    from Bio.PDB import MMCIFParser, PDBParser
-
-    if path.endswith(".cif") or path.endswith(".mmcif"):
-        parser = MMCIFParser(QUIET=True)
-    else:
-        parser = PDBParser(QUIET=True)
-
-    structure = parser.get_structure("s", path)
-    chains = []
-    seen = set()
-    for model in structure:
-        for chain in model:
-            if chain.id in seen:
-                continue
-            seq = []
-            for res in chain:
-                if res.id[0] != " ":
-                    continue  # skip hetero
-                one = THREE_TO_ONE.get(res.resname.strip(), "X")
-                seq.append(one)
-            if seq:
-                seen.add(chain.id)
-                chains.append({
-                    "id": chain.id,
-                    "sequence": "".join(seq),
-                    "length": len(seq),
-                })
-        break
-    return chains
+import _structure
 
 
 def extract_sequences(path):
-    """Try gemmi first, fall back to BioPython."""
-    try:
-        chains = extract_sequences_gemmi(path)
-        if chains:
-            return chains
-    except ImportError:
-        pass
-    except Exception as e:
-        print(f"WARNING: gemmi failed ({e}), trying BioPython...", file=sys.stderr)
-
-    try:
-        chains = extract_sequences_biopython(path)
-        if chains:
-            return chains
-    except ImportError:
-        pass
-    except Exception as e:
-        print(f"WARNING: BioPython failed ({e})", file=sys.stderr)
-
-    print("ERROR: Neither gemmi nor BioPython could parse the file.", file=sys.stderr)
-    sys.exit(1)
+    """Chain sequences from a PDB or mmCIF, as [{id, sequence, length}, ...]."""
+    chains = _structure.read_chains(path)
+    if not chains:
+        print(f"ERROR: no protein chains read from {path}", file=sys.stderr)
+        sys.exit(1)
+    return [{"id": cid, "sequence": seq, "length": len(seq)}
+            for cid, (_, seq, _) in chains.items()]
 
 
 def main():
@@ -141,13 +40,13 @@ def main():
     if not args.chains and os.environ.get("BENCHMARK_CHAINS"):
         args.chains = os.environ["BENCHMARK_CHAINS"].replace(",", " ").replace(":", " ").split()
 
-    if not os.path.exists(args.input):
+    if not os.path.exists(args.input):   # pragma: no cover
         print(f"ERROR: File not found: {args.input}", file=sys.stderr)
         sys.exit(1)
 
     chains = extract_sequences(args.input)
 
-    if not chains:
+    if not chains:   # pragma: no cover
         print("ERROR: No protein chains found.", file=sys.stderr)
         sys.exit(1)
 
@@ -188,7 +87,7 @@ def main():
                 for cid in requested[:2]:
                     if cid in chain_map:
                         alias_chains.append(chain_map[cid])
-                    else:
+                    else:   # pragma: no cover
                         print(f"WARNING: --chains {cid} not found in PDB (available: {[c['id'] for c in chains]})", file=sys.stderr)
             if not alias_chains and len(chains) >= 2:
                 alias_chains = chains[:2]

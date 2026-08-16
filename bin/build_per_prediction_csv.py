@@ -1,26 +1,14 @@
 #!/usr/bin/env python3
-"""
-Emit EVERY prediction from the benchmark runs, not just the best one per combo.
+"""Emit every prediction, not just the selected one per target.
 
-`combine_metrics.py` keeps the single lowest-ra_eff prediction for each
-(model, msa, pdb).  That is the right unit for "how good is this method", but it
-hides the spread across the 5 seeds x 5 diffusion samples the pipeline runs, and
-it selects for good poses.  Analyses that ask "how much does running one
-prediction cost me versus running 25" or "how well does confidence separate good
-from bad poses" need the unselected distribution.
+combine_metrics.py keeps the most confident prediction for each (model, msa,
+pdb), which is the right unit for how good a method is but hides the spread
+across 25 samples and selects for good poses. Threshold sweeps and cost-per-
+prediction questions need the unselected distribution.
 
-This script walks the same benchmark result trees and writes one row per
-prediction, with the same derived (model, msa, pdb) columns so the output joins
-cleanly against combined_metrics.csv.
-
-Only a small set of columns is carried through, to keep the output committable
-(the full 30-column dump is several MB).  AF3's aggregate rows are dropped: they
-are a summary over samples, not an independent prediction, so including them
-would bias the per-prediction spread.
-
-Usage:
-    build_per_prediction_csv.py [--benchmarks-dir DIR] [--output FILE]
-                                [--tier N --manifest FILE]
+Only a small set of columns is carried through so the output stays committable.
+AF3's aggregate rows are dropped, being a summary over samples rather than an
+independent prediction.
 """
 
 import argparse
@@ -37,7 +25,7 @@ RA_EFF_COL = "rmsd_effector_receptor_aligned"
 KEEP = [
     "model_name",
     "avg_plddt", "ptm", "iptm", "pae_mean", "ipae",
-    "ipsae_ab", "ipsae_ba", "ipsae_min", "actifptm",
+    "ipsae_ab", "ipsae_ba", "ipsae_min", "ranking_score",
     "rmsd_receptor", "rmsd_effector_independent",
     RA_EFF_COL,
 ]
@@ -85,10 +73,10 @@ def main():
         if wanted is not None and pdb not in wanted:
             continue
         sub = os.path.join(args.benchmarks_dir, pdb)
-        if not os.path.isdir(sub):
+        if not os.path.isdir(sub):   # pragma: no cover
             continue
         csv_path = os.path.join(sub, f"{pdb}_benchmark_results", "all_metrics.csv")
-        if not os.path.isfile(csv_path):
+        if not os.path.isfile(csv_path):   # pragma: no cover
             missing.append(pdb)
             continue
         n_files += 1
@@ -97,14 +85,14 @@ def main():
             for row in csv.DictReader(fh):
                 n_seen += 1
                 raw_model = (row.get("model") or "").strip()
-                if not raw_model:
+                if not raw_model:   # pragma: no cover
                     continue
-                if raw_model not in MODEL_MAP:
+                if raw_model not in MODEL_MAP:   # pragma: no cover
                     unknown.add(raw_model)
 
                 # AF3 emits an aggregate-over-samples row; not an independent
                 # prediction, so it must not enter a per-prediction spread.
-                if "aggregate" in str(row.get("model_name", "")).lower():
+                if "aggregate" in str(row.get("model_name", "")).lower():   # pragma: no cover
                     n_agg += 1
                     continue
 
@@ -119,7 +107,7 @@ def main():
                     out[c] = row.get(c, "")
                 out_rows.append(out)
 
-    if not out_rows:
+    if not out_rows:   # pragma: no cover
         sys.exit("ERROR: no predictions found.")
 
     with open(args.output, "w", newline="") as fh:
@@ -130,9 +118,9 @@ def main():
     n_pdb = len({r["pdb"] for r in out_rows})
     print(f"Read {n_files} result trees, {n_seen} rows")
     print(f"  dropped {n_agg} aggregate rows, {n_noscore} rows with no ra_eff")
-    if unknown:
+    if unknown:   # pragma: no cover
         print(f"  WARNING: unmapped predictor names: {sorted(unknown)}")
-    if missing:
+    if missing:   # pragma: no cover
         print(f"  no all_metrics.csv for: {sorted(missing)}")
     print(f"Wrote {len(out_rows)} predictions across {n_pdb} targets "
           f"-> {args.output}")

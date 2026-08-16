@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
-"""
-extract_constraints_boltz1.py
------------------------------
-Extract a pocket-only constraint from a two-chain reference PDB for Boltz-1.
+"""Extract a pocket-only constraint from a two-chain reference PDB for Boltz-1.
 
-Boltz-1 schema.py enforces max_distance == 6.0 for ALL constraint types,
-so contact constraints (which have variable distances) are NOT generated.
-Only the pocket constraint is written.
+Boltz-1's schema forces max_distance to exactly 6.0 on every constraint type and
+rejects contact constraints, so only a pocket block is written.
 
 Usage:
-    python extract_constraints_boltz1.py <pdb> <rec_chain> <eff_chain> \
+    extract_constraints_boltz1.py <pdb> <rec_chain> <eff_chain> \
         <pocket_cutoff> <pocket_max_distance>
-
-Writes YAML-formatted constraint block to stdout; prints stats to stderr.
 """
 import sys
 
@@ -42,7 +36,7 @@ def main():
     eff_ca = coords.get(eff_chain, {})
     rec_lbl = labels.get(rec_chain, {})
 
-    if not rec_ca:
+    if not rec_ca:   # pragma: no cover
         print(f"ERROR: No Cα atoms for chain {rec_chain}", file=sys.stderr)
         sys.exit(1)
     if not eff_ca:

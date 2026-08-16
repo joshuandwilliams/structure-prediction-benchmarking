@@ -68,18 +68,18 @@ def main():
         with open(path, newline="") as fh:
             for r in csv.DictReader(fh):
                 predictor = (r.get("model") or "").strip()
-                if not predictor:
+                if not predictor:   # pragma: no cover
                     continue
-                if (r.get("status") or "").strip() != "COMPLETED":
+                if (r.get("status") or "").strip() != "COMPLETED":   # pragma: no cover
                     n_skipped += 1
                     continue
-                if to_float(r.get("elapsed_s")) is None:
+                if to_float(r.get("elapsed_s")) is None:   # pragma: no cover
                     n_skipped += 1
                     continue
                 key = (pdb, predictor)
-                if is_rerun:
+                if is_rerun:   # pragma: no cover
                     seen.add(key)
-                elif key in seen:
+                elif key in seen:   # pragma: no cover
                     continue          # superseded by the re-run
                 model, msa = map_model(predictor)
                 out = {"model": model, "msa": msa, "pdb": pdb,

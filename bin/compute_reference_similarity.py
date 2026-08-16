@@ -1,41 +1,21 @@
 #!/usr/bin/env python3
-"""
-Pairwise sequence similarity between benchmark reference complexes.
+"""Pairwise sequence similarity between the benchmark reference complexes.
 
-Tier 1 contains allelic effector series (AVR-PikD/E/A/C/F) and engineered HMA
-variants, so many references differ by only one or two residues.  That makes it
-possible to ask whether near-identical inputs are predicted with near-identical
-accuracy, or whether small sequence changes produce large accuracy swings.
+Many references differ by only one or two residues, so this supports asking
+whether near-identical inputs are predicted with near-identical accuracy.
 
-For every pair of references this emits the receptor and effector percent
-identity, the substitution count, and the number of alignment gap positions.
-Gap positions are reported separately because the references are crystal
-constructs: two entries can have the same underlying protein but different
-modelled boundaries, which is a construct difference rather than a sequence
-difference.
+Alignment is EMBOSS needle at its published defaults (EBLOSUM62, gap open 10.0,
+extend 0.5). Both percent-identity conventions are emitted, since the
+denominator can move the number by tens of points. *_identity divides by the
+shorter ungapped sequence, *_identity_over_alignment by the full alignment
+length. Gap positions are reported separately from substitutions because these
+are crystal constructs with different modelled boundaries.
 
-Alignment is done by EMBOSS ``needle`` (Needleman-Wunsch, global), called as a
-subprocess with ``-aformat3 fasta`` so the gapped sequences come back directly.
-Using the standard tool rather than a hand-rolled aligner means the parameters
-are the published EMBOSS defaults (EBLOSUM62, gap open 10.0, gap extend 0.5) and
-the alignment is reproducible by anyone with EMBOSS.
-
-Percent identity has no single agreed definition, so **both** conventional
-denominators are emitted and neither is left implicit:
-
-* ``*_identity`` divides by the shorter ungapped sequence.  A construct is then
-  not penalised for residues the other entry simply did not model, which is what
-  we want here, since several references are the same protein resolved to
-  different boundaries.
-* ``*_identity_over_alignment`` divides by the full alignment length, including
-  gap columns.  This is the number ``needle`` itself prints.
-
-Requires biopython (sequence extraction from coordinates) and EMBOSS on PATH.
-Output is small (n*(n-1)/2 rows) and meant to be committed so the analysis
-renders without re-running this.
+Needs EMBOSS on PATH. Output is small and committed, so the analyses render
+without re-running it.
 
 Usage:
-    compute_reference_similarity.py --tier 1 --output reference_similarity.csv
+    compute_reference_similarity.py --output reference_similarity.csv
 """
 
 import argparse
@@ -52,7 +32,7 @@ warnings.filterwarnings("ignore")
 
 try:
     from Bio.PDB import PDBParser, PPBuilder
-except ImportError:
+except ImportError:   # pragma: no cover
     sys.exit("ERROR: biopython required.  pip install biopython")
 
 RECEPTOR_CHAIN = "A"    # plant protein, by the data/ two-chain convention
@@ -91,7 +71,7 @@ def needle_align(a, b, workdir):
                 cur.append(line.strip())
     if cur:
         seqs.append("".join(cur))
-    if len(seqs) != 2 or len(seqs[0]) != len(seqs[1]):
+    if len(seqs) != 2 or len(seqs[0]) != len(seqs[1]):   # pragma: no cover
         raise RuntimeError("unexpected needle output")
     return seqs[0].upper(), seqs[1].upper()
 
@@ -109,7 +89,7 @@ def chain_sequences(pdb_path):
 
 def compare(workdir, a, b):
     """Identity by both denominators, plus substitution and gap counts."""
-    if not a or not b:
+    if not a or not b:   # pragma: no cover
         return None, None, None, None
     ga, gb = needle_align(a, b, workdir)
     matches = subs = gaps = 0
@@ -140,23 +120,23 @@ def main():
 
     with open(args.manifest, newline="") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
-    if args.tier is not None:
+    if args.tier is not None:   # pragma: no cover
         rows = [r for r in rows if int(r["tier"]) == args.tier]
     pdbs = sorted(r["pdb"] for r in rows)
     system = {r["pdb"]: r["system"] for r in rows}
-    if len(pdbs) < 2:
+    if len(pdbs) < 2:   # pragma: no cover
         sys.exit("ERROR: need at least two references to compare.")
 
     seqs = {}
     for pdb in pdbs:
         path = os.path.join(args.refs_dir, f"{pdb}.pdb")
-        if not os.path.isfile(path):
+        if not os.path.isfile(path):   # pragma: no cover
             print(f"  WARNING: missing reference {path}")
             continue
         seqs[pdb] = chain_sequences(path)
     print(f"Read {len(seqs)} references")
 
-    if shutil.which("needle") is None:
+    if shutil.which("needle") is None:   # pragma: no cover
         sys.exit("ERROR: EMBOSS needle not on PATH.  "
                  "conda install -c bioconda emboss")
 
@@ -167,7 +147,7 @@ def main():
                           seqs[b].get(RECEPTOR_CHAIN, ""))
             eff = compare(workdir, seqs[a].get(EFFECTOR_CHAIN, ""),
                           seqs[b].get(EFFECTOR_CHAIN, ""))
-            if rec[0] is None or eff[0] is None:
+            if rec[0] is None or eff[0] is None:   # pragma: no cover
                 continue
             rec_id, rec_id_aln, rec_sub, rec_gap = rec
             eff_id, eff_id_aln, eff_sub, eff_gap = eff

@@ -1,31 +1,16 @@
 #!/usr/bin/env python3
-"""
-esmfold2_fold.py
-----------------
-Run one seeded ESMFold2 fold of a two-chain (receptor + effector) complex.
+"""Run one seeded ESMFold2 fold of a two-chain complex.
 
-ESMFold2 (CZ Biohub, ESMC-6B backbone) is a single-sequence, MSA-free,
-diffusion-based *complex* predictor. There is no MSA input — the two chains
-are passed as two ProteinInput entries and folded directly. This script is
-invoked inside esmfold2.img (which provides the `esm` package and the Biohub
-`transformers` fork) once per seed by modules/esmfold2.nf.
+ESMFold2 is single-sequence and MSA-free, so the two chains are passed as two
+ProteinInput entries and folded directly. Runs inside esmfold2.img, once per
+seed.
 
-It reads the receptor/effector sequences from a small JSON file and writes,
-into --out-dir:
-
-    esmfold2_pred.cif   the predicted complex (mmCIF)
-    confidences.json    {"plddt": [...0-100], "ptm": float, "iptm"?, "pae"?}
-
-compute_metrics.py's parse_esmfold2 consumes that pair, exactly as it does the
-AF3 model.cif + confidences.json.
+Writes esmfold2_pred.cif and a confidences.json holding pLDDT on the 0-100
+scale, pTM, ipTM and PAE where the model exposes it, which is the pair
+compute_metrics.py's parse_esmfold2 consumes.
 
 Usage:
-    python esmfold2_fold.py --input-json input.json --out-dir output_seed42 \
-        --seed 42 [--num-loops 20] [--num-sampling-steps 100] [--repo biohub/ESMFold2]
-
-input.json shape:
-    {"receptor": {"id": "A", "sequence": "MKFL..."},
-     "effector": {"id": "B", "sequence": "GTAL..."}}
+    esmfold2_fold.py --input-json input.json --out-dir DIR --seed 42
 """
 
 from __future__ import annotations
@@ -40,7 +25,7 @@ def _to_float_list(x):
     """Coerce a torch tensor / numpy array / scalar / list to a flat float list."""
     import numpy as np
 
-    if hasattr(x, "detach"):          # torch tensor
+    if hasattr(x, "detach"):          # torch tensor   # pragma: no cover
         x = x.detach().cpu().numpy()
     return np.asarray(x, dtype=float).ravel().tolist()
 
@@ -78,7 +63,7 @@ def build_confidences(plddt, ptm=None, iptm=None, pae=None):
     return conf
 
 
-def main():
+def main():   # pragma: no cover - needs a GPU and the esm package
     ap = argparse.ArgumentParser(description="Run one seeded ESMFold2 complex fold.")
     ap.add_argument("--input-json", required=True,
                     help="JSON with receptor/effector id+sequence.")

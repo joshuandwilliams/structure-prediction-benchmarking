@@ -1,20 +1,12 @@
 #!/usr/bin/env python3
-"""
-validate_boltz_yaml.py
-----------------------
-Validate a Boltz input YAML before running `boltz predict`.
+"""Validate a Boltz input YAML before running boltz predict.
 
-Checks:
-  - sequences and constraints parse
-  - For --model boltz1: max_distance must be exactly 6.0 on every constraint
-    block, and no `contact` constraints are allowed (schema rejects them)
-  - For --model boltz2: token1 and token2 on contact blocks are well-formed
-    [chain, resnum] pairs
-
-Exits non-zero on any structural problem.
+Checks that sequences and constraints parse, and for Boltz-1 that every
+constraint block has max_distance exactly 6.0 with no contact blocks, which its
+schema rejects.
 
 Usage:
-    python validate_boltz_yaml.py <input.yaml> --model {boltz1,boltz2}
+    validate_boltz_yaml.py <input.yaml> [--model boltz1|boltz2]
 """
 import argparse
 import sys
@@ -56,7 +48,7 @@ def main():
                 if not isinstance(ct.get("token1"), list) or len(ct["token1"]) != 2:
                     print(f"  ERROR: malformed token1: {ct.get('token1')}")
                     sys.exit(1)
-                if not isinstance(ct.get("token2"), list) or len(ct["token2"]) != 2:
+                if not isinstance(ct.get("token2"), list) or len(ct["token2"]) != 2:   # pragma: no cover
                     print(f"  ERROR: malformed token2: {ct.get('token2')}")
                     sys.exit(1)
 

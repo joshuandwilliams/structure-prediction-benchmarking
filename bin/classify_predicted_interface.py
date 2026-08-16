@@ -1,42 +1,19 @@
 #!/usr/bin/env python3
-"""
-Classify which interface each model predicted, across every model.
+"""Classify which receptor surface each prediction placed the effector on.
 
-The Pik-family HMA has (at least) two effector-binding surfaces represented in
-this benchmark: the AVR-Pik surface used by every Pik target except 6Q76, and a
-distinct surface used by AVR-Pia in 6Q76.  The two sit about 27 A apart, so a
-prediction can be assigned to one or the other by where its effector lands once
-all receptors are put in a common frame.
+The Pik HMA has two effector-binding surfaces in this set, the AVR-Pik surface
+and the AVR-Pia surface of 6Q76, about 27 Å apart. Each structure is reduced to
+the set of receptor residues its effector contacts, expressed in a common frame,
+and compared by Jaccard overlap against both. Contacts rather than centroid
+distance, because a centroid test ignores orientation and passes an effector
+sitting on the right surface the wrong way round.
 
-Assignment is by INTERFACE CONTACTS, not by centroid distance.  A centroid test
-answers the wrong question: it ignores orientation entirely, so an effector
-sitting on the correct surface but rotated the wrong way scores as correct.
-Boltz-1 restrained exposed this — every target passed a 13 A centroid test while
-RMSDs ran to 22 A.
-
-Instead, each structure is reduced to the SET of receptor residues its effector
-contacts (any Ca pair within --contact-cutoff A), expressed in the common frame's
-numbering so sets are comparable across targets.  That set is compared by
-Jaccard overlap against
-  (a) the target's own true AVR-Pik interface, and
-  (b) the AVR-Pia interface from 6Q76,
-and the prediction is labelled:
-
-    correct site   higher Jaccard with its own true interface, above --min-jaccard
-    AVR-Pia site   higher Jaccard with the AVR-Pia interface, above --min-jaccard
-    other          below --min-jaccard against both
-
-6Q76 is EXCLUDED from the tally: it defines the frame, and its correct site is
-the AVR-Pia site, so it cannot distinguish the two categories.
-
-Caveat.  This reads best_models/, which holds each model's own confident pick
-rather than its lowest-RMSD pose (compute_metrics.py selects the highest
-avg_plddt; earlier runs selected the highest actifpTM).  That is the right basis
-for asking what a model would hand you unprompted, but it is not the model's
-best achievable pose, so the counts here are not an accuracy ceiling.
+Reads best_models/, which holds each model's confidence-selected structure
+rather than its lowest-RMSD one, so the counts are what a model returns
+unprompted rather than its achievable ceiling.
 
 Usage:
-    classify_predicted_interface.py --plot-dir <dir> --output interfaces.csv
+    classify_predicted_interface.py --plot-dir DIR --output interfaces.csv
 """
 
 import argparse
@@ -47,20 +24,21 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import matplotlib
+
 matplotlib.use("Agg")
+import _structure
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from combine_metrics import MODEL_MAP  # noqa: E402
-from test_common_wrong_interface import (  # noqa: E402
-    aligner, apply_tf, kabsch, matched_indices,
+from common_wrong_interface import (  # noqa: E402
+    aligner,
+    apply_tf,
+    kabsch,
+    matched_indices,
 )
-
-from Bio.PDB import MMCIFParser, PDBParser  # noqa: E402
-from Bio.PDB.MMCIF2Dict import MMCIF2Dict  # noqa: E402
-from Bio.PDB.Polypeptide import protein_letters_3to1  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRAME = "6Q76"
@@ -73,50 +51,7 @@ DISPLAY = {
 }
 
 
-def _ca_from_cif_dict(path, chain_id):
-    """Minimal mmCIF CA reader.
-
-    Biopython's MMCIFParser requires _atom_site.occupancy, which ESMFold2 does
-    not emit, so fall back to reading the atom_site loop directly.
-    """
-    d = MMCIF2Dict(path)
-    chains = d["_atom_site.auth_asym_id"] if "_atom_site.auth_asym_id" in d \
-        else d["_atom_site.label_asym_id"]
-    names = d["_atom_site.label_atom_id"]
-    comps = d["_atom_site.label_comp_id"]
-    xs, ys, zs = (d["_atom_site.Cartn_x"], d["_atom_site.Cartn_y"],
-                  d["_atom_site.Cartn_z"])
-    coords, seq = [], []
-    for ch, nm, comp, x, y, z in zip(chains, names, comps, xs, ys, zs):
-        if ch != chain_id or nm != "CA":
-            continue
-        try:
-            seq.append(protein_letters_3to1[comp])
-        except KeyError:
-            continue
-        coords.append((float(x), float(y), float(z)))
-    return np.asarray(coords, float), "".join(seq)
-
-
-def ca_and_seq(path, chain_id):
-    """Ca coordinates and sequence for one chain, from PDB or mmCIF."""
-    if path.endswith(".cif"):
-        try:
-            st = MMCIFParser(QUIET=True).get_structure("x", path)
-        except Exception:
-            return _ca_from_cif_dict(path, chain_id)
-    else:
-        st = PDBParser(QUIET=True).get_structure("x", path)
-    coords, seq = [], []
-    for res in st[0][chain_id]:
-        if "CA" not in res:
-            continue
-        try:
-            seq.append(protein_letters_3to1[res.get_resname()])
-        except KeyError:
-            continue
-        coords.append(res["CA"].get_coord())
-    return np.asarray(coords, float), "".join(seq)
+ca_and_seq = _structure.read_chain
 
 
 def contact_set(rec_xyz, eff_xyz, rec_index_to_frame, cutoff):
@@ -190,7 +125,7 @@ def main():
     # For each target: the TRUE AVR-Pik interface as a set of receptor residues
     # in the frame's numbering, plus its own reference (for recomputing ra_eff).
     def frame_map(rec_seq):
-        """row index in this receptor -> row index in the frame receptor."""
+        """Row index in this receptor -> row index in the frame receptor."""
         return {i: j for i, j in matched_indices(al, rec_seq, frame_rec_seq)}
 
     true_iface, own_ref = {}, {}
@@ -211,8 +146,6 @@ def main():
     # on both and the label would turn on noise. Compare against the
     # DISCRIMINATING residues only, so the assignment depends solely on what
     # distinguishes the two surfaces.
-    shared_all = set.intersection(*[true_iface[p] for p in targets if p != FRAME]) \
-        if len(targets) > 1 else set()
     shared = {r for p, v in true_iface.items() if p != FRAME for r in (v & pia_iface)}
     pia_only = pia_iface - shared
     print(f"shared between the two interfaces: {len(shared)} residues "
@@ -257,9 +190,6 @@ def main():
             if len(m) < 20:
                 print(f"  skip {predictor}/{pdb}: only {len(m)} aligned residues")
                 continue
-            tf = kabsch(rec[[i for i, _ in m]], frame_rec[[j for _, j in m]])
-            c = apply_tf(eff, tf).mean(0)
-
             # ra_eff OF THIS STRUCTURE.  combined_metrics.csv holds the
             # lowest-ra_eff of the 25 predictions, whereas this classifies the
             # model's own confidence-selected pick -- a different structure.
