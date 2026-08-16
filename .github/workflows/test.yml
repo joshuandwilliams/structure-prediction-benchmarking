@@ -1,0 +1,32 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test]
+
+      # The hpc tier needs a GPU, the containers or a finished benchmark run, so
+      # only the two local tiers run here. Coverage over bin/ is gated at 100%
+      # by pyproject, and pytest applies that automatically through addopts.
+      #
+      # Six tests skip on a bare runner and that is expected: four need the
+      # EMBOSS needle binary, one needs esm and a GPU, one needs a published
+      # best_models/ tree. addopts carries -ra, so the reasons are printed in
+      # the log rather than hidden behind a count.
+      - name: Run the local test tiers
+        run: pytest -m "local_unit or local_integration"

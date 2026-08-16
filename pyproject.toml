@@ -22,6 +22,7 @@ test = [
     "gemmi>=0.6",
     "biopython>=1.81",
     "scipy>=1.11",
+    "matplotlib>=3.7",
 ]
 experiments = [
     "numpy>=1.24",
@@ -81,9 +82,10 @@ convention = "pep257"
 source = ["bin"]
 
 [tool.coverage.report]
-# These two only run against published best_models/ trees, so they are covered
-# by the hpc tier rather than locally. Everything else must be tested or carry
-# an explicit pragma.
+# These two are driven as subprocesses by the tests, so coverage cannot
+# instrument them even though they are exercised end to end. Their behaviour is
+# pinned by tests/characterization/test_interface_classification.py instead.
+# Everything else must be tested or carry an explicit pragma.
 omit = [
     "bin/classify_predicted_interface.py",
     "bin/common_wrong_interface.py",
