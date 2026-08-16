@@ -15,6 +15,15 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      # bin/compute_reference_similarity.py shells out to EMBOSS needle for the
+      # pairwise alignment. Without it those four tests skip, and since they are
+      # that module's only coverage, the 100% gate fails at 96%.
+      - name: Install EMBOSS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends emboss
+          needle -version
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -24,9 +33,8 @@ jobs:
       # only the two local tiers run here. Coverage over bin/ is gated at 100%
       # by pyproject, and pytest applies that automatically through addopts.
       #
-      # Six tests skip on a bare runner and that is expected: four need the
-      # EMBOSS needle binary, one needs esm and a GPU, one needs a published
-      # best_models/ tree. addopts carries -ra, so the reasons are printed in
-      # the log rather than hidden behind a count.
+      # Two tests skip here and that is expected: one needs esm and a GPU, one
+      # needs a published best_models/ tree. addopts carries -ra, so the
+      # reasons are printed in the log.
       - name: Run the local test tiers
         run: pytest -m "local_unit or local_integration"
