@@ -1,32 +1,23 @@
 /*
- * =============================================================================
- * Boltz-2 module
- * =============================================================================
- * Three variants sharing the same unified `boltz predict` CLI (no --model
- * flag needed — Boltz-2 is the default in the unified package):
+ * Boltz-2: single-sequence baseline, with a ColabFold MSA, and with pocket
+ * plus dense contact constraints, each in a template-free and an
+ * effector-template form.
  *
- *   BOLTZ2              — no MSA, no constraints (single-sequence baseline)
- *   BOLTZ2_MSA          — with colabfold_search a3m MSA
- *   BOLTZ2_CONSTRAINED  — pocket + dense contact constraints from reference
+ * The template variants supply the reference effector chain as a structural
+ * template (force: true, threshold 1.0, enforced by --use_potentials), matching
+ * what structure-negative-steering gives Boltz-2. They are not part of the
+ * model comparison. Each pairs with its template-free twin to measure what the
+ * known effector fold is worth.
  *
- * Gotchas preserved from the original bench scripts:
- *   1. --no_kernels is required because cuequivariance_torch is absent from
- *      Boltz1_Boltz2_Chai1.img.
- *   2. `boltz predict` exits 0 even on silent parse failures — but only the
- *      Boltz-1 scripts added explicit PDB-count guards.  For Boltz-2 we
- *      follow the same defensive pattern for consistency.
- *   3. Seeds are run SERIALLY inside the process (5 seeds: 42, 123, 456,
- *      789, 1024).
+ * --no_kernels is required because cuequivariance_torch is absent from the
+ * image. Seeds run serially inside the process to respect the GPU queue.
  */
 
-
 /*
- * BOLTZ2
- * ------
- * Unconstrained Boltz-2 baseline: single-sequence MSA, no constraints.
- * Receives an effector structural template (CIF) in PDB mode; passes a
- * zero-byte sentinel in FASTA mode.  --use_potentials is required for
- * `force: true` in the template block to be enforced.
+ * Unconstrained Boltz-2 baseline: single-sequence MSA, no constraints, no
+ * structural template.  Nothing derived from the reference complex reaches
+ * the model, so this variant is directly comparable with every other
+ * predictor.
  */
 process BOLTZ2 {
     tag "${params.project_name}"
@@ -40,8 +31,6 @@ process BOLTZ2 {
     val effector_seq
     val rec_chain
     val eff_chain
-    path effector_template_cif // effector chain CIF for template block
-                               // (empty sentinel = no template, e.g. FASTA mode)
 
     output:
     path "all_outputs",  emit: prediction_dir
@@ -51,7 +40,6 @@ process BOLTZ2 {
     """
     set -euo pipefail
 
-    # ─── Single-sequence MSAs (query only) ────────────────────────────────
     mkdir -p msa
     cat > msa/chain_A.a3m << EOF
 >query
@@ -75,75 +63,18 @@ sequences:
       msa: \${PWD}/msa/chain_B.a3m
 YAMLEOF
 
-    # ─── Effector structural template (non-empty CIF only) ────────────────
-    # Template block is indented under the effector chain definition.
-    # chain_id = effector chain in this YAML; template_id = chain in the CIF
-    # (always 'A' since extract_effector_template.py relabels to A).
-    # force: true locks the effector fold; --use_potentials below enforces it.
-    if [ -s "${effector_template_cif}" ]; then
-        cat >> input.yaml << TEMPLEOF
-      templates:
-        - cif: \${PWD}/${effector_template_cif}
-          chain_id: ${eff_chain}
-          template_id: A
-          force: true
-          threshold: 1.0
-TEMPLEOF
-    fi
-
     echo "Input YAML:"
     cat input.yaml
     echo ""
 
-    run_seed() {
-        local seed="\$1"
-        local out_dir="\$2"
-
-        singularity exec --nv \\
-            --bind \${PWD}:\${PWD} \\
-            ${params.benchmark_container} boltz predict \\
-                input.yaml \\
-                --out_dir "\${out_dir}" \\
-                --recycling_steps 20 \\
-                --diffusion_samples 5 \\
-                --sampling_steps 20 \\
-                --seed "\${seed}" \\
-                --num_workers 0 \\
-                --output_format pdb \\
-                --write_full_pae \\
-                --use_potentials \\
-                --no_kernels \\
-                --override
-
-        local n_pdb
-        n_pdb=\$(find "\${out_dir}" -name "*.pdb" 2>/dev/null | wc -l)
-        if [ "\${n_pdb}" -eq 0 ]; then
-            echo "ERROR: Seed \${seed} produced no PDB files." >&2
-            exit 1
-        fi
-        echo "  Seed \${seed}: \${n_pdb} PDB(s) OK"
-    }
-
-    run_seed 42 output
-    for SEED in 123 456 789 1024; do
-        echo "Running Boltz-2 with seed \${SEED}..."
-        run_seed "\${SEED}" "output_seed\${SEED}"
-    done
-
-    # ─── Aggregate outputs ────────────────────────────────────────────────
-    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz json
-
-    echo "Aggregated PDB files:"
-    find all_outputs -name "*.pdb" | sort
+    bash ${projectDir}/bin/run_boltz_seeds.sh \\
+        input.yaml ${params.benchmark_container} ${projectDir} "Boltz-2"
     """
 }
 
-
 /*
- * BOLTZ2_MSA
- * ----------
- * Boltz-2 with the colabfold_search a3m MSAs shared from the COLABFOLD_SEARCH
- * process.  Identical to BOLTZ2 except for the MSA source.
+ * Boltz-2 with the colabfold_search a3m MSAs shared from the
+ * COLABFOLD_SEARCH process.  Identical to BOLTZ2 except for the MSA source.
  */
 process BOLTZ2_MSA {
     tag "${params.project_name}"
@@ -159,8 +90,6 @@ process BOLTZ2_MSA {
     val  eff_chain
     path chain_a_a3m
     path chain_b_a3m
-    path effector_template_cif // effector chain CIF for template block
-                               // (empty sentinel = no template, e.g. FASTA mode)
 
     output:
     path "all_outputs",  emit: prediction_dir
@@ -183,72 +112,20 @@ sequences:
       msa: \${PWD}/${chain_b_a3m.name}
 YAMLEOF
 
-    # ─── Effector structural template (non-empty CIF only) ────────────────
-    if [ -s "${effector_template_cif}" ]; then
-        cat >> input.yaml << TEMPLEOF
-      templates:
-        - cif: \${PWD}/${effector_template_cif}
-          chain_id: ${eff_chain}
-          template_id: A
-          force: true
-          threshold: 1.0
-TEMPLEOF
-    fi
-
     echo "Input YAML:"
     cat input.yaml
     echo ""
 
-    run_seed() {
-        local seed="\$1"
-        local out_dir="\$2"
-
-        singularity exec --nv \\
-            --bind \${PWD}:\${PWD} \\
-            ${params.benchmark_container} boltz predict \\
-                input.yaml \\
-                --out_dir "\${out_dir}" \\
-                --recycling_steps 20 \\
-                --diffusion_samples 5 \\
-                --sampling_steps 20 \\
-                --seed "\${seed}" \\
-                --num_workers 0 \\
-                --output_format pdb \\
-                --write_full_pae \\
-                --use_potentials \\
-                --no_kernels \\
-                --override
-
-        local n_pdb
-        n_pdb=\$(find "\${out_dir}" -name "*.pdb" 2>/dev/null | wc -l)
-        if [ "\${n_pdb}" -eq 0 ]; then
-            echo "ERROR: Seed \${seed} produced no PDB files." >&2
-            exit 1
-        fi
-        echo "  Seed \${seed}: \${n_pdb} PDB(s) OK"
-    }
-
-    run_seed 42 output
-    for SEED in 123 456 789 1024; do
-        echo "Running Boltz-2 MSA with seed \${SEED}..."
-        run_seed "\${SEED}" "output_seed\${SEED}"
-    done
-
-    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz json
-
-    echo "Aggregated PDB files:"
-    find all_outputs -name "*.pdb" | sort
+    bash ${projectDir}/bin/run_boltz_seeds.sh \\
+        input.yaml ${params.benchmark_container} ${projectDir} "Boltz-2 MSA"
     """
 }
 
-
 /*
- * BOLTZ2_CONSTRAINED
- * ------------------
- * Boltz-2 with pocket + dense contact constraints derived from the
- * reference complex via bin/extract_constraints_boltz2.py.  No template
- * — constraints only — so the reference structure is never directly
- * given to the model (the reference IS the answer we are scoring against).
+ * Boltz-2 with pocket + dense contact constraints derived from the reference
+ * complex via bin/extract_constraints_boltz2.py.  No template — constraints
+ * only — so the reference structure is never directly given to the model
+ * (the reference IS the answer we are scoring against).
  */
 process BOLTZ2_CONSTRAINED {
     tag "${params.project_name}"
@@ -278,7 +155,6 @@ process BOLTZ2_CONSTRAINED {
     """
     set -euo pipefail
 
-    # ─── Extract constraints from reference PDB ───────────────────────────
     echo "=== Extracting constraints from reference PDB ==="
     echo "  Reference PDB:     ${reference_pdb}"
     echo "  Contact cutoff:    ${contact_cutoff} Å"
@@ -304,7 +180,6 @@ process BOLTZ2_CONSTRAINED {
         exit 1
     fi
 
-    # ─── Prepare Boltz YAML ───────────────────────────────────────────────
     mkdir -p msa
     cat > msa/chain_A.a3m << EOF
 >query
@@ -336,51 +211,232 @@ YAMLEOF
     echo "  ... (\${TOTAL_LINES} lines total, \${N_CONTACTS} contact constraints)"
     echo ""
 
-    # ─── Validate YAML ────────────────────────────────────────────────────
     echo "=== Validating YAML ==="
     singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
         python ${projectDir}/bin/validate_boltz_yaml.py input.yaml --model boltz2
 
-    # ─── Run predictions ──────────────────────────────────────────────────
-    run_seed() {
-        local seed="\$1"
-        local out_dir="\$2"
+    bash ${projectDir}/bin/run_boltz_seeds.sh \\
+        input.yaml ${params.benchmark_container} ${projectDir} "Boltz-2 constrained"
+    """
+}
 
-        singularity exec --nv \\
-            --bind \${PWD}:\${PWD} \\
-            ${params.benchmark_container} boltz predict \\
-                input.yaml \\
-                --out_dir "\${out_dir}" \\
-                --recycling_steps 20 \\
-                --diffusion_samples 5 \\
-                --sampling_steps 20 \\
-                --seed "\${seed}" \\
-                --num_workers 0 \\
-                --output_format pdb \\
-                --write_full_pae \\
-                --use_potentials \\
-                --no_kernels \\
-                --override
+/*
+ * =============================================================================
+ * Template variants (Run 2)
+ * =============================================================================
+ * The three Boltz-2 variants above, re-run with the effector chain of the
+ * reference complex supplied as a structural template (force: true,
+ * threshold 1.0, enforced by --use_potentials).  The template block matches
+ * the one structure-negative-steering's engine writes, so these variants and the
+ * steering runs give the model the same structural information.
+ *
+ * These are NOT part of the model-vs-model comparison — every variant in that
+ * comparison is template-free.  Their purpose is the within-model measurement
+ * of what the known effector fold is worth: pair each against its
+ * template-free twin (boltz2, boltz2_msa, boltz2_constrained), which differs
+ * in nothing else.
+ */
 
-        local n_pdb
-        n_pdb=\$(find "\${out_dir}" -name "*.pdb" 2>/dev/null | wc -l)
-        if [ "\${n_pdb}" -eq 0 ]; then
-            echo "ERROR: Seed \${seed} produced no PDB files." >&2
-            exit 1
-        fi
-        echo "  Seed \${seed}: \${n_pdb} PDB(s) OK"
-    }
+/* BOLTZ2 plus the effector template. Single-sequence MSA, no constraints. */
+process BOLTZ2_TEMPLATE {
+    tag "${params.project_name}"
+    label 'gpu'
 
-    run_seed 42 output
-    for SEED in 123 456 789 1024; do
-        echo "Running Boltz-2 constrained with seed \${SEED}..."
-        run_seed "\${SEED}" "output_seed\${SEED}"
-    done
+    publishDir "${params.outdir}/boltz2_template", mode: 'copy',
+        pattern: '{input.yaml,all_outputs/**}'
 
-    # ─── Aggregate outputs ────────────────────────────────────────────────
-    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz json
+    input:
+    val  receptor_seq
+    val  effector_seq
+    val  rec_chain
+    val  eff_chain
+    path effector_template_cif
 
-    echo "Aggregated PDB files:"
-    find all_outputs -name "*.pdb" | sort
+    output:
+    path "all_outputs",  emit: prediction_dir
+    path "input.yaml"
+
+    script:
+    """
+    set -euo pipefail
+
+    mkdir -p msa
+    cat > msa/chain_A.a3m << EOF
+>query
+${receptor_seq}
+EOF
+    cat > msa/chain_B.a3m << EOF
+>query
+${effector_seq}
+EOF
+
+    cat > input.yaml << YAMLEOF
+version: 1
+sequences:
+  - protein:
+      id: ${rec_chain}
+      sequence: ${receptor_seq}
+      msa: \${PWD}/msa/chain_A.a3m
+  - protein:
+      id: ${eff_chain}
+      sequence: ${effector_seq}
+      msa: \${PWD}/msa/chain_B.a3m
+      templates:
+        - cif: \${PWD}/${effector_template_cif}
+          chain_id: ${eff_chain}
+          template_id: A
+          force: true
+          threshold: 1.0
+YAMLEOF
+
+    echo "Input YAML:"
+    cat input.yaml
+    echo ""
+
+    bash ${projectDir}/bin/run_boltz_seeds.sh \\
+        input.yaml ${params.benchmark_container} ${projectDir} "Boltz-2 (template)"
+    """
+}
+
+/* BOLTZ2_MSA plus the effector template. */
+process BOLTZ2_MSA_TEMPLATE {
+    tag "${params.project_name}"
+    label 'gpu'
+
+    publishDir "${params.outdir}/boltz2_msa_template", mode: 'copy',
+        pattern: '{input.yaml,all_outputs/**}'
+
+    input:
+    val  receptor_seq
+    val  effector_seq
+    val  rec_chain
+    val  eff_chain
+    path chain_a_a3m
+    path chain_b_a3m
+    path effector_template_cif
+
+    output:
+    path "all_outputs",  emit: prediction_dir
+    path "input.yaml"
+
+    script:
+    """
+    set -euo pipefail
+
+    cat > input.yaml << YAMLEOF
+version: 1
+sequences:
+  - protein:
+      id: ${rec_chain}
+      sequence: ${receptor_seq}
+      msa: \${PWD}/${chain_a_a3m.name}
+  - protein:
+      id: ${eff_chain}
+      sequence: ${effector_seq}
+      msa: \${PWD}/${chain_b_a3m.name}
+      templates:
+        - cif: \${PWD}/${effector_template_cif}
+          chain_id: ${eff_chain}
+          template_id: A
+          force: true
+          threshold: 1.0
+YAMLEOF
+
+    echo "Input YAML:"
+    cat input.yaml
+    echo ""
+
+    bash ${projectDir}/bin/run_boltz_seeds.sh \\
+        input.yaml ${params.benchmark_container} ${projectDir} "Boltz-2 MSA (template)"
+    """
+}
+
+/*
+ * BOLTZ2_CONSTRAINED plus the effector template — pocket + dense contact
+ * constraints AND the known effector fold.  This is the combination the
+ * steering engine's constrained runs use.
+ */
+process BOLTZ2_CONSTRAINED_TEMPLATE {
+    tag "${params.project_name}"
+    label 'gpu'
+
+    publishDir "${params.outdir}/boltz2_constrained_template", mode: 'copy',
+        pattern: '{input.yaml,constraints.yaml,all_outputs/**}'
+
+    input:
+    val  receptor_seq
+    val  effector_seq
+    val  rec_chain
+    val  eff_chain
+    path reference_pdb
+    path effector_template_cif
+
+    output:
+    path "all_outputs",      emit: prediction_dir
+    path "input.yaml"
+    path "constraints.yaml"
+
+    script:
+    def contact_cutoff      = 10.0
+    def contact_max         = 50
+    def contact_tolerance   = 0.0
+    def pocket_cutoff       = 8.0
+    def pocket_max_distance = 8.0
+    """
+    set -euo pipefail
+
+    singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
+        python ${projectDir}/bin/extract_constraints_boltz2.py \\
+            ${reference_pdb} ${rec_chain} ${eff_chain} \\
+            ${contact_cutoff} ${contact_max} ${contact_tolerance} \\
+            ${pocket_cutoff} ${pocket_max_distance} \\
+        > constraints.yaml
+
+    N_CONTACTS=\$(grep -c "^  - contact:" constraints.yaml || true)
+    N_POCKET=\$(grep -c "^  - pocket:" constraints.yaml || true)
+    echo "Generated constraints: \${N_POCKET} pocket, \${N_CONTACTS} contact pairs"
+
+    if [ "\${N_CONTACTS}" -eq 0 ] && [ "\${N_POCKET}" -eq 0 ]; then
+        echo "ERROR: No constraints generated." >&2
+        exit 1
+    fi
+
+    mkdir -p msa
+    cat > msa/chain_A.a3m << EOF
+>query
+${receptor_seq}
+EOF
+    cat > msa/chain_B.a3m << EOF
+>query
+${effector_seq}
+EOF
+
+    cat > input.yaml << YAMLEOF
+version: 1
+sequences:
+  - protein:
+      id: ${rec_chain}
+      sequence: ${receptor_seq}
+      msa: \${PWD}/msa/chain_A.a3m
+  - protein:
+      id: ${eff_chain}
+      sequence: ${effector_seq}
+      msa: \${PWD}/msa/chain_B.a3m
+      templates:
+        - cif: \${PWD}/${effector_template_cif}
+          chain_id: ${eff_chain}
+          template_id: A
+          force: true
+          threshold: 1.0
+YAMLEOF
+
+    cat constraints.yaml >> input.yaml
+
+    echo "=== Validating YAML ==="
+    singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
+        python ${projectDir}/bin/validate_boltz_yaml.py input.yaml --model boltz2
+
+    bash ${projectDir}/bin/run_boltz_seeds.sh \\
+        input.yaml ${params.benchmark_container} ${projectDir} "Boltz-2 constrained (template)"
     """
 }

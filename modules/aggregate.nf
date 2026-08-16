@@ -18,17 +18,11 @@
  * so -resume behaves correctly.
  */
 
-
 /*
- * AGGREGATE_RESULTS
- * -----------------
- * Inputs:
- *   tagged_metrics   — list of per-model '<tag>_metrics.csv' files.
- *                      All filenames are unique because each alias used a
- *                      distinct model_tag, so staging collisions are
- *                      impossible.
- *   tagged_best_dirs — list of per-model '<tag>_best' directories.
- *                      Same uniqueness guarantee.
+ * Inputs: tagged_metrics   — list of per-model '<tag>_metrics.csv' files.
+ * All filenames are unique because each alias used a distinct model_tag, so
+ * staging collisions are impossible. tagged_best_dirs — list of per-model
+ * '<tag>_best' directories. Same uniqueness guarantee.
  */
 process AGGREGATE_RESULTS {
     tag "${params.project_name}"
@@ -49,7 +43,6 @@ process AGGREGATE_RESULTS {
     """
     set -euo pipefail
 
-    # ─── Debug: dump the work dir tree before processing ─────────────────
     # Helps diagnose staging issues without needing to SSH to the HPC —
     # the full listing lands in .command.err and gets echoed back by
     # Nextflow on failure.
@@ -63,7 +56,6 @@ process AGGREGATE_RESULTS {
     ls -la best_in/ 2>/dev/null >&2 || echo "(best_in/ missing)" >&2
     echo "" >&2
 
-    # ─── Combine metrics.csv files ────────────────────────────────────────
     # Recursive find so we catch the files wherever Nextflow staged them
     # (top level, metrics_in/, or variants).  Use -L to follow the symlinks
     # that Nextflow uses for staging on NFS.  No -type filter so both
@@ -94,7 +86,6 @@ process AGGREGATE_RESULTS {
     echo "Combined \${#csv_files[@]} metrics CSVs into all_metrics.csv"
     echo ""
 
-    # ─── Collect best models ──────────────────────────────────────────────
     # Each staged *_best directory has a unique name.  Find them wherever
     # Nextflow placed them (top level or best_in/) and copy into
     # best_models/<model_tag>_best/.  -L follows the staging symlinks.
@@ -113,7 +104,6 @@ process AGGREGATE_RESULTS {
         echo "  \${src} -> best_models/\${name}/"
     done
 
-    # ─── Ranked CSV: sort by primary (whole-fit) effector RMSD ───────────
     # rmsd_effector_receptor_aligned is the whole-fit metric:
     # sequence-aligned single-pass Kabsch fit of the receptor, then that
     # transform applied rigidly to the effector.  Measures "once the

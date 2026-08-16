@@ -1,24 +1,12 @@
 /*
- * =============================================================================
- * Preprocessing module
- * =============================================================================
- * Runs extract_sequences.py inside the Boltz1_Boltz2_Chai1.img container to
- * pull chain sequences out of the reference PDB.  Downstream processes read
- * chain_A / chain_B sequences as value channels parsed from the produced
- * sequences.json.
- *
- * The --chains flag pins which PDB chains become CHAIN_A/CHAIN_B aliases.
- * For 7B1I that is "B C", for 6G10 it is "A B", etc.
+ * Sequence extraction from the reference complex, and the effector structural
+ * template used only by the Run-2 *_template variants.
  */
 
-
 /*
- * EXTRACT_SEQUENCES
- * -----------------
  * Parse chain sequences from the reference complex PDB and emit a
- * sequences.json file that the workflow parses with JsonSlurper.
- *
- * Also publishes the reference PDB to the results root so downstream
+ * sequences.json file that the workflow parses with JsonSlurper. Also
+ * publishes the reference PDB to the results root so downstream
  * metric/aggregation steps can find it in a predictable location.
  */
 process EXTRACT_SEQUENCES {
@@ -51,17 +39,14 @@ process EXTRACT_SEQUENCES {
     """
 }
 
-
 /*
- * EXTRACT_EFFECTOR_TEMPLATE
- * -------------------------
- * Extract the effector chain from the reference PDB and write it as both
- * PDB and mmCIF for use as a structural template in AF3 and ColabFold.
- * Only runs in PDB input mode; FASTA mode passes a no-template sentinel.
- *
- * The extracted chain is relabelled to chain A (single-chain convention).
- * AF3 uses the mmCIF form embedded in the JSON template block; ColabFold
- * uses the PDB form via --custom-template-path.
+ * Extract the effector chain from the reference PDB as an mmCIF structural
+ * template, relabelled to chain A. Used ONLY by the *_template Boltz-2
+ * variants (Run 2).  Every other variant in the benchmark is template-free,
+ * so that the model-vs-model comparison holds inputs constant.  The
+ * *_template variants exist to measure what supplying the known effector
+ * fold is worth, as a within-model comparison against the matching template-
+ * free Boltz-2 variant.
  */
 process EXTRACT_EFFECTOR_TEMPLATE {
     tag "${params.project_name}"
@@ -75,7 +60,6 @@ process EXTRACT_EFFECTOR_TEMPLATE {
     val  effector_chain
 
     output:
-    path "effector_template.pdb", emit: template_pdb
     path "effector_template.cif", emit: template_cif
 
     script:

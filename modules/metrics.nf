@@ -27,25 +27,18 @@
  *     distinguishable in the aggregated CSV)
  */
 
-
 /*
- * COMPUTE_METRICS
- * ---------------
- * Input tuple:
- *   model_tag      — identifier used for output subdir and the CSV model column
- *                    (e.g. boltz1, boltz1_msa, boltz2_constrained, af3_nomsa)
- *   parser_tag     — base parser to pass to --model (e.g. boltz1, boltz2,
- *                    chai1, af2m, af3, colabfold).  Normalises variants
- *                    back to their underlying output format.
- *   prediction_dir — staging dir containing all seed outputs for this model
- *   reference_pdb  — reference structure for RMSD/DockQ
- *   chain_a_len    — receptor chain length (int)
- *   chain_b_len    — effector chain length (int)
- *   rec_chain      — receptor chain ID (e.g. A, B)
- *   eff_chain      — effector chain ID (e.g. B, C)
- *
- * Outputs two tagged tuples so the aggregate step can correlate metrics
- * and best-model dirs by model_tag without extra plumbing.
+ * Input tuple: model_tag      — identifier used for output subdir and the
+ * CSV model column (e.g. boltz1, boltz1_msa, boltz2_constrained, af3_nomsa)
+ * parser_tag     — base parser to pass to --model (e.g. boltz1, boltz2,
+ * chai1, af2m, af3, colabfold).  Normalises variants back to their
+ * underlying output format. prediction_dir — staging dir containing all seed
+ * outputs for this model reference_pdb  — reference structure for RMSD/DockQ
+ * chain_a_len    — receptor chain length (int) chain_b_len    — effector
+ * chain length (int) rec_chain      — receptor chain ID (e.g. A, B)
+ * eff_chain      — effector chain ID (e.g. B, C) Outputs two tagged tuples
+ * so the aggregate step can correlate metrics and best-model dirs by
+ * model_tag without extra plumbing.
  */
 process COMPUTE_METRICS {
     tag "${model_tag}"
@@ -92,7 +85,6 @@ process COMPUTE_METRICS {
             --receptor-chain ${rec_chain} \\
             --effector-chain ${eff_chain}
 
-    # ─── Rewrite the 'model' column if parser_tag != model_tag ───────────
     # Needed so boltz1_msa / boltz1_constrained / af3_nomsa / colabfold_nomsa
     # appear as themselves in the aggregated CSV rather than as their base
     # parser name.
@@ -118,7 +110,6 @@ with open("metrics.csv", "w", newline="") as f:
 PYEOF
     fi
 
-    # ─── Create uniquely-named copies for the aggregate step ─────────────
     # These live alongside the non-prefixed outputs; publishDir only
     # copies the non-prefixed ones (via 'pattern').
     cp metrics.csv "${model_tag}_metrics.csv"

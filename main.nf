@@ -1,73 +1,36 @@
 #!/usr/bin/env nextflow
 
 /*
- * =============================================================================
- * Structure Prediction Benchmark Pipeline (v0.1.0)
- * =============================================================================
+ * Benchmark protein-complex structure predictors against a reference complex.
  *
- * Benchmarks multiple protein complex structure predictors against a
- * reference PDB:
+ * Run 1 is the 13 template-free variants, the model comparison. Run 2 is the
+ * three Boltz-2 variants that receive the reference effector as a structural
+ * template, which pair with their template-free twins to measure what the known
+ * effector fold is worth. Select which to run via the models list in params.
  *
- *   Boltz-1, Boltz-1 + MSA, Boltz-1 + pocket constraint
- *   Boltz-2, Boltz-2 + MSA, Boltz-2 + pocket/contact constraints
- *   Chai-1
- *   AlphaFold2-Multimer (with MSA)
- *   AlphaFold 3, AlphaFold 3 (no MSA)
- *   ColabFold, ColabFold (no MSA)
- *   ESMFold2 (single-sequence; diffusion complex predictor)
- *
- * Each model writes predictions + metrics to ${outdir}/<model>/.  The
- * shared ColabFold MSA is computed once and reused by every model that
- * needs it (boltz1_msa, boltz2_msa, colabfold).  All seed loops inside
- * each model are serial to respect the small jic-gpu queue at NBI/JIC.
- *
- * Resource accounting is handled natively by Nextflow's trace / report /
- * timeline outputs — no custom collect_slurm_stats.sh step is needed.
- *
- * Author: Josh Williams
- * Institute: John Innes Centre / The Sainsbury Laboratory
- * =============================================================================
+ * Each variant writes to ${outdir}/<model>/. The ColabFold MSA is computed once
+ * and shared. GPU seed loops are serial to respect the small jic-gpu queue.
  */
 
 nextflow.enable.dsl = 2
 
-// ---------------------------------------------------------------------------
 // Parameter defaults
-// ---------------------------------------------------------------------------
 
-// ── Project ─────────────────────────────────────────────────────────────
+// Project
 params.project_name     = "structure_prediction_benchmark"
 params.outdir           = "${launchDir}/${params.project_name}_results"
 
-// ── Inputs ──────────────────────────────────────────────────────────────
-// Two mutually-exclusive input modes:
-//
-//   PDB mode (original):  --reference_pdb + --receptor_chain + --effector_chain
-//                         Provides an experimental reference complex; the
-//                         pipeline computes structural RMSD/DockQ against it
-//                         in addition to confidence-based metrics.
-//
-//   FASTA mode (new):     --input_fasta  (a 2-entry protein FASTA: receptor
-//                         then effector).  No experimental reference structure
-//                         is required; structural metrics are skipped and
-//                         only confidence metrics (pLDDT/ipTM/pTM/...) are
-//                         emitted.  --receptor_chain / --effector_chain are
-//                         optional in this mode and default to A / B — they
-//                         become the synthetic chain IDs assigned to the two
-//                         FASTA entries when handed to the predictors.
-//
-params.reference_pdb    = null      // PDB mode: two-chain reference complex
-params.input_fasta      = null      // FASTA mode: two-entry FASTA file
-params.receptor_chain   = null      // PDB mode: receptor chain ID (required)
-                                    // FASTA mode: synthetic chain ID (default 'A')
-params.effector_chain   = null      // PDB mode: effector chain ID (required)
-                                    // FASTA mode: synthetic chain ID (default 'B')
+// A two-chain reference complex plus the chain IDs pinning receptor and
+// effector. Required, since every run scores RMSDs against it.
+params.reference_pdb    = null
+params.receptor_chain   = null
+params.effector_chain   = null
 
-// ── Model selection ─────────────────────────────────────────────────────
+// Model selection
 // A list of models to run; null means 'run them all'.
 params.models           = null
 
-// ── Infrastructure paths ────────────────────────────────────────────────
+// Infrastructure paths
 // Containers
 params.benchmark_container = "/hpc-home/jowillia/singularity/Boltz1_Boltz2_Chai1_ColabFold/Boltz1_Boltz2_Chai1.img"
 params.colabfold_container = "/hpc-home/jowillia/singularity/ColabFold/colabfold.img"
@@ -93,49 +56,24 @@ params.af3_package_id   = "e8edb411-7374-4342-b9f1-408da41fc197"
 // GPU concurrency (matches max_gpu_parallel in nextflow.config)
 params.max_gpu_parallel = 1
 
-// ---------------------------------------------------------------------------
-// Input validation
-// ---------------------------------------------------------------------------
-//
-// Exactly one of --reference_pdb / --input_fasta must be provided.  In PDB
-// mode the chain IDs are required (they pin which chains in the reference
-// complex are receptor vs effector).  In FASTA mode chain IDs default to
-// A/B and act as synthetic labels for the two FASTA entries.
-
-if (params.reference_pdb && params.input_fasta) {
-    error "Provide either --reference_pdb (PDB mode) OR --input_fasta " +
-          "(FASTA mode), not both."
-}
-if (!params.reference_pdb && !params.input_fasta) {
-    error "Please provide either --reference_pdb (PDB mode) or " +
-          "--input_fasta (FASTA mode)."
-}
-
-def INPUT_MODE = params.reference_pdb ? 'pdb' : 'fasta'
-
-if (INPUT_MODE == 'pdb') {
-    if (!params.receptor_chain || !params.effector_chain) {
-        error "PDB mode requires --receptor_chain and --effector_chain " +
-              "(PDB chain IDs)."
+// Wrapped in a function because newer Nextflow rejects top-level statements.
+def validate_params() {
+    if (!params.reference_pdb) {
+        error "Please provide --reference_pdb (a two-chain reference complex)."
     }
-} else {
-    // FASTA mode: chain IDs are optional synthetic labels.
-    if (!params.receptor_chain) { params.receptor_chain = 'A' }
-    if (!params.effector_chain) { params.effector_chain = 'B' }
+    if (!params.receptor_chain || !params.effector_chain) {
+        error "Please provide --receptor_chain and --effector_chain (PDB chain IDs)."
+    }
     if (params.receptor_chain == params.effector_chain) {
-        error "FASTA mode: --receptor_chain and --effector_chain must differ " +
+        error "--receptor_chain and --effector_chain must differ " +
               "(both were '${params.receptor_chain}')."
     }
 }
 
-// ---------------------------------------------------------------------------
 // Model selection
-// ---------------------------------------------------------------------------
 
-// The full catalogue of models this pipeline can run.  Parser tag names the
-// underlying output format so compute_metrics.py picks the right parser;
-// variants that share a parser (e.g. boltz1_msa → boltz1) keep their own
-// model_tag in the output CSV.
+// MODEL_TO_PARSER names the output format, so variants sharing a format
+// (boltz1_msa parses as boltz1) still keep their own tag in the output CSV.
 def ALL_MODELS = [
     'boltz1',              // parser: boltz1
     'boltz1_msa',          // parser: boltz1
@@ -149,7 +87,11 @@ def ALL_MODELS = [
     'af3_nomsa',           // parser: af3
     'colabfold',           // parser: colabfold
     'colabfold_nomsa',     // parser: colabfold
-    'esmfold2',            // parser: esmfold2 (single-sequence diffusion complex predictor)
+    'esmfold2',            // parser: esmfold2
+    // Run 2, not part of the model comparison
+    'boltz2_template',              // parser: boltz2
+    'boltz2_msa_template',          // parser: boltz2
+    'boltz2_constrained_template',  // parser: boltz2
 ]
 
 def MODEL_TO_PARSER = [
@@ -166,62 +108,61 @@ def MODEL_TO_PARSER = [
     'colabfold'          : 'colabfold',
     'colabfold_nomsa'    : 'colabfold',
     'esmfold2'           : 'esmfold2',
+    'boltz2_template'             : 'boltz2',
+    'boltz2_msa_template'         : 'boltz2',
+    'boltz2_constrained_template' : 'boltz2',
 ]
 
-def SELECTED_MODELS
-if (params.models == null) {
-    SELECTED_MODELS = ALL_MODELS
-} else {
-    // params.models may arrive as a List (from YAML) or a whitespace/comma
-    // -separated string (from the CLI).  Normalise to a List<String>.
+// ALL_MODELS is passed in rather than read from the enclosing scope: a
+// top-level `def` is local to the script body and is not visible here.
+def selected_models(all_models) {
+    if (params.models == null) {
+        return all_models
+    }
+    // May arrive as a YAML list or a comma/space-separated CLI string.
     def raw = params.models
-    def requested
-    if (raw instanceof List) {
-        requested = raw.collect { it.toString().trim() }
-    } else {
-        requested = raw.toString().replaceAll(',', ' ').split()*.trim()
-    }
-    requested = requested.findAll { it }  // drop empty strings
+    def requested = (raw instanceof List)
+        ? raw.collect { it.toString().trim() }
+        : raw.toString().replaceAll(',', ' ').split()*.trim()
+    requested = requested.findAll { it }
 
-    def unknown = requested.findAll { !(it in ALL_MODELS) }
+    def unknown = requested.findAll { !(it in all_models) }
     if (unknown) {
-        error "Unknown model(s) in --models: ${unknown.join(', ')}\nValid: ${ALL_MODELS.join(', ')}"
+        error "Unknown model(s) in --models: ${unknown.join(', ')}\nValid: ${all_models.join(', ')}"
     }
-    SELECTED_MODELS = requested
+    return requested
 }
 
-def needs_shared_msa      = SELECTED_MODELS.any { it in ['boltz1_msa', 'boltz2_msa', 'colabfold'] }
+def SELECTED_MODELS = selected_models(ALL_MODELS)
+
+def needs_shared_msa      = SELECTED_MODELS.any { it in ['boltz1_msa', 'boltz2_msa', 'colabfold',
+                                                         'boltz2_msa_template'] }
 def needs_af3_db          = SELECTED_MODELS.any { it in ['af3', 'af3_nomsa'] }
-def needs_eff_template    = INPUT_MODE == 'pdb' &&
-                            SELECTED_MODELS.any { it in ['af3_nomsa', 'colabfold', 'colabfold_nomsa',
-                                                          'boltz2', 'boltz2_msa'] }
+
+// The effector structural template is used ONLY by the Run-2 *_template variants.
+// Every variant in the model-vs-model comparison is template-free.
+def needs_eff_template    = SELECTED_MODELS.any { it in ['boltz2_template', 'boltz2_msa_template',
+                                                         'boltz2_constrained_template'] }
 
 log.info """
 =============================================================
 Structure Prediction Benchmark — v0.1.0
 =============================================================
 Project:         ${params.project_name}
-Input mode:      ${INPUT_MODE}
-${ INPUT_MODE == 'pdb' \
-    ? "Reference PDB:   ${params.reference_pdb}" \
-    : "Input FASTA:     ${params.input_fasta}" }
-Receptor chain:  ${params.receptor_chain}${ INPUT_MODE == 'fasta' ? '  (synthetic label for FASTA entry 1)' : '' }
-Effector chain:  ${params.effector_chain}${ INPUT_MODE == 'fasta' ? '  (synthetic label for FASTA entry 2)' : '' }
+Reference PDB:   ${params.reference_pdb}
+Receptor chain:  ${params.receptor_chain}
+Effector chain:  ${params.effector_chain}
 Output:          ${params.outdir}
 Models:          ${SELECTED_MODELS.join(', ')}
 Shared MSA:      ${needs_shared_msa ? 'yes' : 'no'}
 AF3 DB setup:    ${needs_af3_db ? 'yes' : 'no'}
-${ INPUT_MODE == 'fasta' ? 'NOTE: FASTA mode — structural RMSD/DockQ skipped, confidence metrics only.' : '' }
 =============================================================
 """.stripIndent()
 
-// ---------------------------------------------------------------------------
 // Include modules
-// ---------------------------------------------------------------------------
 
 include { EXTRACT_SEQUENCES            } from './modules/preprocessing'
 include { EXTRACT_EFFECTOR_TEMPLATE    } from './modules/preprocessing'
-include { EXTRACT_SEQUENCES_FROM_FASTA } from './modules/preprocessing_fasta'
 include { COLABFOLD_SEARCH             } from './modules/msa'
 
 include { BOLTZ1                  } from './modules/boltz1'
@@ -231,6 +172,9 @@ include { BOLTZ1_CONSTRAINED      } from './modules/boltz1'
 include { BOLTZ2                  } from './modules/boltz2'
 include { BOLTZ2_MSA              } from './modules/boltz2'
 include { BOLTZ2_CONSTRAINED      } from './modules/boltz2'
+include { BOLTZ2_TEMPLATE             } from './modules/boltz2'
+include { BOLTZ2_MSA_TEMPLATE         } from './modules/boltz2'
+include { BOLTZ2_CONSTRAINED_TEMPLATE } from './modules/boltz2'
 
 include { CHAI1                   } from './modules/chai1'
 include { AF2M                    } from './modules/af2m'
@@ -258,12 +202,13 @@ include { COMPUTE_METRICS as METRICS_AF3_NOMSA           } from './modules/metri
 include { COMPUTE_METRICS as METRICS_COLABFOLD           } from './modules/metrics'
 include { COMPUTE_METRICS as METRICS_COLABFOLD_NOMSA     } from './modules/metrics'
 include { COMPUTE_METRICS as METRICS_ESMFOLD2            } from './modules/metrics'
+include { COMPUTE_METRICS as METRICS_BOLTZ2_TEMPLATE             } from './modules/metrics'
+include { COMPUTE_METRICS as METRICS_BOLTZ2_MSA_TEMPLATE         } from './modules/metrics'
+include { COMPUTE_METRICS as METRICS_BOLTZ2_CONSTRAINED_TEMPLATE } from './modules/metrics'
 
 include { AGGREGATE_RESULTS       } from './modules/aggregate'
 
-// ---------------------------------------------------------------------------
 // Helper: build the input tuple for a COMPUTE_METRICS alias
-// ---------------------------------------------------------------------------
 // Each alias consumes a queue channel of exactly one tuple:
 //   [model_tag, parser_tag, prediction_dir,
 //    reference_pdb, chain_a_len, chain_b_len, rec_chain, eff_chain]
@@ -285,63 +230,32 @@ def build_metric_input(model_tag, parser_tag, pred_dir_ch, ref_pdb_ch, ch_a_len_
     }
 }
 
-// ---------------------------------------------------------------------------
 // Workflow
-// ---------------------------------------------------------------------------
 
 workflow {
 
-    // =====================================================================
-    // Stage 0: extract sequences from reference PDB OR from input FASTA
-    // =====================================================================
-    //
-    // Both preprocessing processes emit identically-shaped outputs:
-    //   .sequences_json — JSON with chains[].id/sequence/length
-    //   .reference_pdb  — either the real reference (PDB mode) or a tiny
-    //                     placeholder containing only REMARK lines (FASTA
-    //                     mode).  compute_metrics.py treats the placeholder
-    //                     as "no reference available" and skips structural
-    //                     RMSD/DockQ while still emitting confidence metrics.
-    //
-    // The downstream stages consume `sequences_json_ch` and
-    // `reference_pdb_src_ch` regardless of which branch ran, so no other
-    // part of the workflow needs to know about the input mode.
+    validate_params()
 
-    def sequences_json_ch
-    def reference_pdb_src_ch
+    // Emits sequences.json and republishes the reference to a predictable
+    // path so every COMPUTE_METRICS alias can find it.
 
-    if (INPUT_MODE == 'pdb') {
-        ref_pdb_file = Channel.fromPath(params.reference_pdb, checkIfExists: true)
+    ref_pdb_file = Channel.fromPath(params.reference_pdb, checkIfExists: true)
 
-        EXTRACT_SEQUENCES(
-            ref_pdb_file,
-            params.receptor_chain,
-            params.effector_chain
-        )
-        sequences_json_ch    = EXTRACT_SEQUENCES.out.sequences_json
-        reference_pdb_src_ch = EXTRACT_SEQUENCES.out.reference_pdb
-    } else {
-        input_fasta_file = Channel.fromPath(params.input_fasta, checkIfExists: true)
+    EXTRACT_SEQUENCES(
+        ref_pdb_file,
+        params.receptor_chain,
+        params.effector_chain
+    )
+    def sequences_json_ch    = EXTRACT_SEQUENCES.out.sequences_json
+    def reference_pdb_src_ch = EXTRACT_SEQUENCES.out.reference_pdb
 
-        EXTRACT_SEQUENCES_FROM_FASTA(
-            input_fasta_file,
-            params.receptor_chain,
-            params.effector_chain
-        )
-        sequences_json_ch    = EXTRACT_SEQUENCES_FROM_FASTA.out.sequences_json
-        reference_pdb_src_ch = EXTRACT_SEQUENCES_FROM_FASTA.out.reference_pdb
-    }
-
-    // Parse sequences.json into value channels.  One combined map step
-    // avoids consuming the queue channel twice; .first() promotes the
-    // result into a value channel so downstream processes (each metric
-    // alias) can read it repeatedly.
+    // One combined map avoids consuming the queue channel twice. .first()
+    // promotes it to a value channel so every metric alias can read it.
     seqs_info_ch = sequences_json_ch.map { json_file ->
         def data = new groovy.json.JsonSlurper().parseText(json_file.text)
-        // Both extract_sequences.py (PDB) and extract_sequences_from_fasta.py
-        // (FASTA) populate `chains` with id/sequence/length entries — build a
-        // map keyed by chain ID so we can look up by receptor_chain and
-        // effector_chain regardless of input mode.
+        // extract_sequences.py populates `chains` with id/sequence/length
+        // entries — build a map keyed by chain ID so we can look up by
+        // receptor_chain and effector_chain.
         def by_id = [:]
         data.chains.each { c -> by_id[c.id] = c }
         def rec = by_id[params.receptor_chain]
@@ -363,37 +277,22 @@ workflow {
     chain_b_len_ch  = seqs_info_ch.map { it.chain_b_len }
 
     // Reference PDB (real or placeholder) as a reusable value channel for
-    // every metric alias.  In FASTA mode this is a comment-only stub and
-    // compute_metrics.py will fall through to confidence-only metrics.
+    // every metric alias.
     ref_pdb_ch = reference_pdb_src_ch.first()
 
-    // =====================================================================
-    // Stage 0b (conditional): extract effector structural template
-    // =====================================================================
+    // Stage 0b, conditional: effector structural template, Run 2 only
     //
-    // PDB mode only, and only when AF3 or ColabFold variants are selected.
-    // AF3 uses the mmCIF form (injected into the JSON template block).
-    // ColabFold uses the PDB form (--custom-template-path).
-    // In FASTA mode or when no template-capable model is selected, the
-    // sentinel file (empty, zero bytes) is passed instead — processes check
-    // with `[ -s ]` and skip template injection when the file is empty.
-    //
-    // AF2M note: run_alphafold.py has no custom-template-path flag; AF2M
-    // templates come from its built-in database search (cutoff 2020-05-14).
+    // Extracted only when a *_template variant is selected.  No variant in the
+    // model-vs-model comparison receives it, so nothing derived from the
+    // reference structure reaches those predictions.
 
-    def no_template_sentinel = Channel.value(file("${projectDir}/bin/no_template.sentinel"))
-    def effector_template_pdb_ch = no_template_sentinel
-    def effector_template_cif_ch = no_template_sentinel
-
+    def effector_template_cif_ch = Channel.empty()
     if (needs_eff_template) {
         EXTRACT_EFFECTOR_TEMPLATE(ref_pdb_ch, params.effector_chain)
-        effector_template_pdb_ch = EXTRACT_EFFECTOR_TEMPLATE.out.template_pdb.first()
         effector_template_cif_ch = EXTRACT_EFFECTOR_TEMPLATE.out.template_cif.first()
     }
 
-    // =====================================================================
     // Stage 1 (conditional): shared ColabFold MSA
-    // =====================================================================
 
     if (needs_shared_msa) {
         COLABFOLD_SEARCH(receptor_seq_ch, effector_seq_ch)
@@ -403,9 +302,7 @@ workflow {
         shared_complex_a3m_ch = COLABFOLD_SEARCH.out.complex_a3m.first()
     }
 
-    // =====================================================================
     // Stage 2 (conditional): AF3 database symlink farm
-    // =====================================================================
 
     if (needs_af3_db) {
         AF3_SETUP_DB()
@@ -413,9 +310,7 @@ workflow {
         af3_db_flag_ch   = AF3_SETUP_DB.out.ready_flag.first()
     }
 
-    // =====================================================================
     // Stage 3: run each selected model and its metrics alias
-    // =====================================================================
     //
     // Collect per-model [tagged_metrics, tagged_best_dir] channels into
     // two lists, then AGGREGATE_RESULTS concatenates them at the end.
@@ -423,7 +318,7 @@ workflow {
     all_tagged_metrics = Channel.empty()
     all_tagged_best    = Channel.empty()
 
-    // ── BOLTZ1 ──────────────────────────────────────────────────────────
+    // BOLTZ1
     if ('boltz1' in SELECTED_MODELS) {
         BOLTZ1(
             receptor_seq_ch, effector_seq_ch,
@@ -439,7 +334,7 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_BOLTZ1.out.tagged_best_dir)
     }
 
-    // ── BOLTZ1_MSA ──────────────────────────────────────────────────────
+    // BOLTZ1_MSA
     if ('boltz1_msa' in SELECTED_MODELS) {
         BOLTZ1_MSA(
             receptor_seq_ch, effector_seq_ch,
@@ -456,7 +351,7 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_BOLTZ1_MSA.out.tagged_best_dir)
     }
 
-    // ── BOLTZ1_CONSTRAINED ──────────────────────────────────────────────
+    // BOLTZ1_CONSTRAINED
     if ('boltz1_constrained' in SELECTED_MODELS) {
         BOLTZ1_CONSTRAINED(
             receptor_seq_ch, effector_seq_ch,
@@ -473,12 +368,11 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_BOLTZ1_CONSTRAINED.out.tagged_best_dir)
     }
 
-    // ── BOLTZ2 ──────────────────────────────────────────────────────────
+    // BOLTZ2
     if ('boltz2' in SELECTED_MODELS) {
         BOLTZ2(
             receptor_seq_ch, effector_seq_ch,
-            params.receptor_chain, params.effector_chain,
-            effector_template_cif_ch
+            params.receptor_chain, params.effector_chain
         )
         METRICS_BOLTZ2(
             build_metric_input('boltz2', MODEL_TO_PARSER['boltz2'],
@@ -490,13 +384,12 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_BOLTZ2.out.tagged_best_dir)
     }
 
-    // ── BOLTZ2_MSA ──────────────────────────────────────────────────────
+    // BOLTZ2_MSA
     if ('boltz2_msa' in SELECTED_MODELS) {
         BOLTZ2_MSA(
             receptor_seq_ch, effector_seq_ch,
             params.receptor_chain, params.effector_chain,
-            shared_a3m_a_ch, shared_a3m_b_ch,
-            effector_template_cif_ch
+            shared_a3m_a_ch, shared_a3m_b_ch
         )
         METRICS_BOLTZ2_MSA(
             build_metric_input('boltz2_msa', MODEL_TO_PARSER['boltz2_msa'],
@@ -508,7 +401,7 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_BOLTZ2_MSA.out.tagged_best_dir)
     }
 
-    // ── BOLTZ2_CONSTRAINED ──────────────────────────────────────────────
+    // BOLTZ2_CONSTRAINED
     if ('boltz2_constrained' in SELECTED_MODELS) {
         BOLTZ2_CONSTRAINED(
             receptor_seq_ch, effector_seq_ch,
@@ -525,7 +418,7 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_BOLTZ2_CONSTRAINED.out.tagged_best_dir)
     }
 
-    // ── CHAI1 ───────────────────────────────────────────────────────────
+    // CHAI1
     if ('chai1' in SELECTED_MODELS) {
         CHAI1(
             receptor_seq_ch, effector_seq_ch,
@@ -541,7 +434,7 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_CHAI1.out.tagged_best_dir)
     }
 
-    // ── AF2M ────────────────────────────────────────────────────────────
+    // AF2M
     if ('af2m' in SELECTED_MODELS) {
         AF2M(receptor_seq_ch, effector_seq_ch)
         METRICS_AF2M(
@@ -554,7 +447,7 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_AF2M.out.tagged_best_dir)
     }
 
-    // ── AF3 ─────────────────────────────────────────────────────────────
+    // AF3
     if ('af3' in SELECTED_MODELS) {
         AF3(
             receptor_seq_ch, effector_seq_ch,
@@ -570,12 +463,11 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_AF3.out.tagged_best_dir)
     }
 
-    // ── AF3_NOMSA ───────────────────────────────────────────────────────
+    // AF3_NOMSA
     if ('af3_nomsa' in SELECTED_MODELS) {
         AF3_NOMSA(
             receptor_seq_ch, effector_seq_ch,
-            af3_db_dir_ch, af3_db_flag_ch,
-            effector_template_cif_ch
+            af3_db_dir_ch, af3_db_flag_ch
         )
         METRICS_AF3_NOMSA(
             build_metric_input('af3_nomsa', MODEL_TO_PARSER['af3_nomsa'],
@@ -587,9 +479,9 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_AF3_NOMSA.out.tagged_best_dir)
     }
 
-    // ── COLABFOLD ───────────────────────────────────────────────────────
+    // COLABFOLD
     if ('colabfold' in SELECTED_MODELS) {
-        COLABFOLD(shared_complex_a3m_ch, effector_template_pdb_ch)
+        COLABFOLD(shared_complex_a3m_ch)
         METRICS_COLABFOLD(
             build_metric_input('colabfold', MODEL_TO_PARSER['colabfold'],
                 COLABFOLD.out.prediction_dir,
@@ -600,9 +492,9 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_COLABFOLD.out.tagged_best_dir)
     }
 
-    // ── COLABFOLD_NOMSA ─────────────────────────────────────────────────
+    // COLABFOLD_NOMSA
     if ('colabfold_nomsa' in SELECTED_MODELS) {
-        COLABFOLD_NOMSA(receptor_seq_ch, effector_seq_ch, effector_template_pdb_ch)
+        COLABFOLD_NOMSA(receptor_seq_ch, effector_seq_ch)
         METRICS_COLABFOLD_NOMSA(
             build_metric_input('colabfold_nomsa', MODEL_TO_PARSER['colabfold_nomsa'],
                 COLABFOLD_NOMSA.out.prediction_dir,
@@ -613,7 +505,7 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_COLABFOLD_NOMSA.out.tagged_best_dir)
     }
 
-    // ── ESMFOLD2 ────────────────────────────────────────────────────────
+    // ESMFOLD2
     // Single-sequence diffusion complex predictor; no MSA / no shared deps.
     if ('esmfold2' in SELECTED_MODELS) {
         ESMFOLD2(
@@ -630,9 +522,63 @@ workflow {
         all_tagged_best    = all_tagged_best.mix(METRICS_ESMFOLD2.out.tagged_best_dir)
     }
 
-    // =====================================================================
+    // Run 2. Not part of the model comparison. Each pairs with its
+    // template-free twin above, differing only in the supplied effector fold.
+
+    // BOLTZ2_TEMPLATE
+    if ('boltz2_template' in SELECTED_MODELS) {
+        BOLTZ2_TEMPLATE(
+            receptor_seq_ch, effector_seq_ch,
+            params.receptor_chain, params.effector_chain,
+            effector_template_cif_ch
+        )
+        METRICS_BOLTZ2_TEMPLATE(
+            build_metric_input('boltz2_template', MODEL_TO_PARSER['boltz2_template'],
+                BOLTZ2_TEMPLATE.out.prediction_dir,
+                ref_pdb_ch, chain_a_len_ch, chain_b_len_ch,
+                params.receptor_chain, params.effector_chain)
+        )
+        all_tagged_metrics = all_tagged_metrics.mix(METRICS_BOLTZ2_TEMPLATE.out.tagged_metrics)
+        all_tagged_best    = all_tagged_best.mix(METRICS_BOLTZ2_TEMPLATE.out.tagged_best_dir)
+    }
+
+    // BOLTZ2_MSA_TEMPLATE
+    if ('boltz2_msa_template' in SELECTED_MODELS) {
+        BOLTZ2_MSA_TEMPLATE(
+            receptor_seq_ch, effector_seq_ch,
+            params.receptor_chain, params.effector_chain,
+            shared_a3m_a_ch, shared_a3m_b_ch,
+            effector_template_cif_ch
+        )
+        METRICS_BOLTZ2_MSA_TEMPLATE(
+            build_metric_input('boltz2_msa_template', MODEL_TO_PARSER['boltz2_msa_template'],
+                BOLTZ2_MSA_TEMPLATE.out.prediction_dir,
+                ref_pdb_ch, chain_a_len_ch, chain_b_len_ch,
+                params.receptor_chain, params.effector_chain)
+        )
+        all_tagged_metrics = all_tagged_metrics.mix(METRICS_BOLTZ2_MSA_TEMPLATE.out.tagged_metrics)
+        all_tagged_best    = all_tagged_best.mix(METRICS_BOLTZ2_MSA_TEMPLATE.out.tagged_best_dir)
+    }
+
+    // BOLTZ2_CONSTRAINED_TEMPLATE
+    if ('boltz2_constrained_template' in SELECTED_MODELS) {
+        BOLTZ2_CONSTRAINED_TEMPLATE(
+            receptor_seq_ch, effector_seq_ch,
+            params.receptor_chain, params.effector_chain,
+            ref_pdb_ch, effector_template_cif_ch
+        )
+        METRICS_BOLTZ2_CONSTRAINED_TEMPLATE(
+            build_metric_input('boltz2_constrained_template',
+                MODEL_TO_PARSER['boltz2_constrained_template'],
+                BOLTZ2_CONSTRAINED_TEMPLATE.out.prediction_dir,
+                ref_pdb_ch, chain_a_len_ch, chain_b_len_ch,
+                params.receptor_chain, params.effector_chain)
+        )
+        all_tagged_metrics = all_tagged_metrics.mix(METRICS_BOLTZ2_CONSTRAINED_TEMPLATE.out.tagged_metrics)
+        all_tagged_best    = all_tagged_best.mix(METRICS_BOLTZ2_CONSTRAINED_TEMPLATE.out.tagged_best_dir)
+    }
+
     // Stage 4: Aggregate
-    // =====================================================================
 
     AGGREGATE_RESULTS(
         all_tagged_metrics.collect(),
@@ -640,196 +586,24 @@ workflow {
     )
 }
 
-// ---------------------------------------------------------------------------
 // On completion
-// ---------------------------------------------------------------------------
 
 workflow.onComplete {
-    // ── Write predictor_runtime_stats.csv ──────────────────────────────
-    // Parse trace.txt and emit a filtered CSV with only the predictor
-    // processes — no preprocessing, no metrics, no aggregation.  Produces
-    // the same shape of information collect_slurm_stats.sh used to emit
-    // in the bash pipeline, derived purely from Nextflow's observer data.
-    //
-    // Runs in the onComplete hook rather than a Nextflow process so it
-    // has guaranteed read access to trace.txt after every task finishes.
-    def PREDICTOR_NAMES = [
-        'BOLTZ1', 'BOLTZ1_MSA', 'BOLTZ1_CONSTRAINED',
-        'BOLTZ2', 'BOLTZ2_MSA', 'BOLTZ2_CONSTRAINED',
-        'CHAI1', 'AF2M',
-        'AF3', 'AF3_NOMSA',
-        'COLABFOLD', 'COLABFOLD_NOMSA',
-        'ESMFOLD2',
-    ] as Set
+    // Runs in the hook rather than a process so trace.txt is guaranteed
+    // complete. The parsing lives in Python so it can be unit-tested.
+    def trace = file("${params.outdir}/trace.txt")
+    def stats = file("${params.outdir}/predictor_runtime_stats.csv")
 
-    // Models whose standalone wall-clock time must include the shared
-    // COLABFOLD_SEARCH MSA step — they cannot run without it in practice.
-    def MSA_MODELS = ['BOLTZ1_MSA', 'BOLTZ2_MSA', 'COLABFOLD'] as Set
-
-    // Parse Nextflow-formatted memory strings like "6.5 GB" / "120 MB"
-    // into GB floats.  Returns null on unrecognised / missing values.
-    def parse_mem_gb = { String s ->
-        if (!s || s == '-' || s == '0') return null
-        def m = (s.trim() =~ /^([\d.]+)\s*([KMGT]?B)$/)
-        if (!m) return null
-        def val  = m[0][1] as double
-        def unit = m[0][2]
-        switch (unit) {
-            case 'B':  return val / (1024d * 1024d * 1024d)
-            case 'KB': return val / (1024d * 1024d)
-            case 'MB': return val / 1024d
-            case 'GB': return val
-            case 'TB': return val * 1024d
-        }
-        return null
-    }
-
-    // Parse Nextflow duration strings like "1h 23m 45s", "45.3s", "2m 10s".
-    // Returns (elapsed_s as long, hms as String).  Nextflow emits the
-    // realtime column as milliseconds when the DSL2 observer writes it,
-    // but falls back to hms strings in some paths; handle both.
-    def parse_duration = { String s ->
-        if (!s || s == '-') return [null, null]
-        s = s.trim()
-        // Plain integer milliseconds
-        if (s ==~ /^\d+$/) {
-            long ms = s as long
-            long secs = (ms / 1000d) as long
-            long h = secs / 3600
-            long m = (secs % 3600) / 60
-            long sec = secs % 60
-            return [secs, String.format('%02d:%02d:%02d', h, m, sec)]
-        }
-        // Human-readable: match any combination of  Nh Nm N(.N)s  Nms
-        long total_ms = 0
-        def patterns = [
-            (~/(\d+)ms/)          : 1L,
-            (~/(\d+(?:\.\d+)?)s/) : 1000L,
-            (~/(\d+)m(?!s)/)      : 60_000L,
-            (~/(\d+)h/)           : 3_600_000L,
-        ]
-        boolean any = false
-        patterns.each { pat, mult ->
-            def mm = (s =~ pat)
-            while (mm.find()) {
-                any = true
-                total_ms += ((mm.group(1) as double) * mult) as long
-            }
-        }
-        if (!any) return [null, null]
-        long secs = (total_ms / 1000d) as long
-        long h = secs / 3600
-        long m = (secs % 3600) / 60
-        long sec = secs % 60
-        return [secs, String.format('%02d:%02d:%02d', h, m, sec)]
-    }
-
-    // Format seconds into HH:MM:SS without going through parse_duration.
-    def fmt_hms = { long secs ->
-        long h   = secs / 3600
-        long m   = (secs % 3600) / 60
-        long sec = secs % 60
-        String.format('%02d:%02d:%02d', h, m, sec)
-    }
-
-    def trace_path = file("${params.outdir}/trace.txt")
-    def out_path   = file("${params.outdir}/predictor_runtime_stats.csv")
-
-    if (!trace_path.exists()) {
-        log.warn "trace.txt not found at ${trace_path} — skipping predictor_runtime_stats.csv"
+    if (!trace.exists()) {
+        log.warn "trace.txt not found at ${trace}, skipping predictor_runtime_stats.csv"
     } else {
-        def lines = trace_path.readLines()
-        if (lines.size() < 2) {
-            log.warn "trace.txt has no data rows — skipping predictor_runtime_stats.csv"
+        def proc = ["python3", "${projectDir}/bin/trace_to_runtime_csv.py",
+                    trace.toString(), stats.toString()].execute()
+        proc.waitFor()
+        if (proc.exitValue() != 0) {
+            log.warn "trace_to_runtime_csv.py failed: ${proc.err.text.trim()}"
         } else {
-            def header = lines[0].split('\t') as List
-            def col = { String name -> header.indexOf(name) }
-
-            def i_process  = col('process')
-            def i_status   = col('status')
-            def i_exit     = col('exit')
-            def i_realtime = col('realtime')
-            def i_cpus     = col('cpus')      // may not be present
-            def i_rss      = col('rss')
-            def i_vmem     = col('vmem')
-            def i_peak_rss = col('peak_rss')
-            def i_peak_vm  = col('peak_vmem')
-            def i_pcpu     = col('%cpu')
-            def i_queue    = col('queue')
-
-            // First pass: collect COLABFOLD_SEARCH wall-clock time so we can
-            // add it to MSA-dependent predictor runtimes (standalone_elapsed_s).
-            // If COLABFOLD_SEARCH ran multiple times, take the max.
-            long msa_elapsed_s = 0L
-            lines.drop(1).each { String msa_line ->
-                def msa_fields = msa_line.split('\t', -1) as List
-                if (i_process < 0 || i_process >= msa_fields.size()) return
-                if (msa_fields[i_process] != 'COLABFOLD_SEARCH') return
-                def rt = i_realtime >= 0 && i_realtime < msa_fields.size() ? msa_fields[i_realtime] : ''
-                def (s, _hms) = parse_duration(rt)
-                if (s != null && s > msa_elapsed_s) msa_elapsed_s = s
-            }
-
-            def rows_out = []
-            rows_out << [
-                'model', 'status', 'exit_code', 'queue',
-                'elapsed_hms', 'elapsed_s',
-                'standalone_elapsed_hms', 'standalone_elapsed_s',
-                'pct_cpu',
-                'rss_gb', 'vmem_gb', 'peak_rss_gb', 'peak_vmem_gb',
-            ].join(',')
-
-            lines.drop(1).each { String line ->
-                def fields = line.split('\t', -1) as List
-                if (i_process < 0 || i_process >= fields.size()) return
-                def proc_name = fields[i_process]
-                if (!(proc_name in PREDICTOR_NAMES)) return
-
-                def status = i_status >= 0 && i_status < fields.size() ? fields[i_status] : ''
-                def exit_c = i_exit   >= 0 && i_exit   < fields.size() ? fields[i_exit]   : ''
-                def queue  = i_queue  >= 0 && i_queue  < fields.size() ? fields[i_queue]  : ''
-
-                def realtime_raw = i_realtime >= 0 && i_realtime < fields.size() ? fields[i_realtime] : ''
-                def (elapsed_s, elapsed_hms) = parse_duration(realtime_raw)
-
-                def pct_cpu = i_pcpu >= 0 && i_pcpu < fields.size() ? fields[i_pcpu] : ''
-
-                def rss_gb      = parse_mem_gb(i_rss      >= 0 && i_rss      < fields.size() ? fields[i_rss]      : '')
-                def vmem_gb     = parse_mem_gb(i_vmem     >= 0 && i_vmem     < fields.size() ? fields[i_vmem]     : '')
-                def peak_rss_gb = parse_mem_gb(i_peak_rss >= 0 && i_peak_rss < fields.size() ? fields[i_peak_rss] : '')
-                def peak_vm_gb  = parse_mem_gb(i_peak_vm  >= 0 && i_peak_vm  < fields.size() ? fields[i_peak_vm]  : '')
-
-                def fmt = { Double v -> v == null ? '' : String.format('%.2f', v) }
-
-                // Standalone time = GPU time + MSA time (for MSA-dependent models)
-                def standalone_s   = (elapsed_s != null)
-                    ? (elapsed_s + ((proc_name in MSA_MODELS) ? msa_elapsed_s : 0L))
-                    : null
-                def standalone_hms = standalone_s != null ? fmt_hms(standalone_s) : ''
-
-                rows_out << [
-                    proc_name.toLowerCase(),
-                    status,
-                    exit_c,
-                    queue,
-                    elapsed_hms ?: '',
-                    elapsed_s   ?: '',
-                    standalone_hms,
-                    standalone_s != null ? standalone_s.toString() : '',
-                    pct_cpu?.replace('%', '') ?: '',
-                    fmt(rss_gb),
-                    fmt(vmem_gb),
-                    fmt(peak_rss_gb),
-                    fmt(peak_vm_gb),
-                ].join(',')
-            }
-
-            if (rows_out.size() > 1) {
-                out_path.text = rows_out.join('\n') + '\n'
-                log.info "Wrote ${rows_out.size() - 1} predictor rows to ${out_path}"
-            } else {
-                log.warn "No predictor rows found in trace.txt — predictor_runtime_stats.csv not written"
-            }
+            log.info proc.text.trim()
         }
     }
 
@@ -843,13 +617,12 @@ workflow.onComplete {
     Success:    ${workflow.success}
 
     Key outputs:
-      ${params.outdir}/all_metrics.csv                           (prediction quality)
-      ${params.outdir}/all_metrics_ranked_by_effector_rmsd.csv   (sorted by eff RMSD)
-      ${params.outdir}/predictor_runtime_stats.csv               (SLURM resource usage)
+      ${params.outdir}/all_metrics.csv
+      ${params.outdir}/all_metrics_ranked_by_effector_rmsd.csv
+      ${params.outdir}/predictor_runtime_stats.csv
       ${params.outdir}/best_models/
-      ${params.outdir}/trace.txt                                 (full Nextflow trace)
-      ${params.outdir}/pipeline_report.html                      (HTML dashboard)
-      ${params.outdir}/timeline.html                             (Gantt chart)
+      ${params.outdir}/trace.txt
+      ${params.outdir}/pipeline_report.html
     =============================================================
     """.stripIndent()
 }

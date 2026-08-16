@@ -1,31 +1,12 @@
 /*
- * =============================================================================
- * ESMFold2 module
- * =============================================================================
- * ESMFold2 (CZ Biohub, ESMC-6B backbone) is a single-sequence, MSA-free,
- * diffusion-based *complex* predictor — competitive with AlphaFold 3 on
- * complexes. Because it folds straight from the ESMC language model there is
- * no MSA stage, so (unlike Boltz/ColabFold) there is no `_msa` variant: this
- * is one model, wired like the Boltz baselines.
+ * ESMFold2 (ESMC-6B backbone), single-sequence and MSA-free, natively
+ * multi-chain. One structure per seed rather than the 25 the others produce,
+ * so any per-prediction comparison must divide by 5 rather than 25.
  *
- * It is natively multi-chain: the receptor and effector are passed as two
- * ProteinInput entries (chain IDs rec_chain / eff_chain). The actual fold runs
- * in bin/esmfold2_fold.py inside esmfold2.img; this process loops the same
- * five seeds (42, 123, 456, 789, 1024) as the other predictors and aggregates
- * the per-seed outputs into the staging tree compute_metrics.py globs.
- *
- * Resources: ESMC-6B is ~25 GB fp32, so this needs a 40 GB+ GPU and ~96 GB
- * RAM (see nextflow.config withName: ESMFOLD2). Each seed produces one
- * diffusion sample — bump --num-* or num_diffusion_samples once the
- * multi-sample result shape is confirmed on a GPU node.
+ * ESMC-6B is ~25 GB in fp32, so this needs a 40 GB GPU and ~96 GB RAM.
  */
 
-
-/*
- * ESMFOLD2
- * --------
- * Fold the receptor+effector complex across 5 seeds, one mmCIF per seed.
- */
+/* Fold the receptor+effector complex across 5 seeds, one mmCIF per seed. */
 process ESMFOLD2 {
     tag "${params.project_name}"
     label 'gpu'
@@ -49,7 +30,6 @@ process ESMFOLD2 {
     """
     set -euo pipefail
 
-    # ─── Two-chain input spec (no MSA — ESMFold2 is single-sequence) ──────
     cat > esmfold2_input.json << JSONEOF
 {
   "receptor": {"id": "${rec_chain}", "sequence": "${receptor_seq}"},
@@ -90,7 +70,6 @@ JSONEOF
         run_seed "\${SEED}" "output_seed\${SEED}"
     done
 
-    # ─── Aggregate per-seed structures + confidences into the staging tree ─
     bash ${projectDir}/bin/aggregate_seed_outputs.sh cif json
 
     echo "Aggregated ESMFold2 CIF files:"

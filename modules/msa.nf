@@ -1,28 +1,13 @@
 /*
- * =============================================================================
- * MSA module — shared MMseqs2 / ColabFold search
- * =============================================================================
- * In the original benchmark scripts, bench_boltz1_msa.sh, bench_boltz2_msa.sh,
- * and bench_colabfold.sh each ran their own independent colabfold_search.
- * That is wasteful because the input sequences are identical across all three
- * (they come from the same reference PDB), so the MSA result is identical too.
+ * Shared MMseqs2 search, run once per target and reused by every variant that
+ * needs an MSA (boltz1_msa, boltz2_msa, boltz2_msa_template, colabfold).
  *
- * This module runs colabfold_search exactly once and emits per-chain MSAs
- * (chain_A.a3m, chain_B.a3m) for Boltz plus a paired complex MSA
- * (complex.a3m) for ColabFold.  The workflow fans these out to BOLTZ1_MSA,
- * BOLTZ2_MSA, and COLABFOLD via value channels so each downstream process
- * sees the same pre-computed MSAs.
- *
- * Container notes:
- *   - colabfold.img is used for the search
- *   - MMSEQS_IGNORE_INDEX=1 matches the bench script setting
- *   - --prefilter-mode 1, --use-env 1, --use-templates 0 match the bench scripts
+ * The input FASTA carries three records so one search yields both forms: the
+ * per-chain unpaired a3m that Boltz consumes, and the ':'-joined complex that
+ * colabfold_search returns as a single paired a3m for ColabFold.
  */
 
-
 /*
- * COLABFOLD_SEARCH
- * ----------------
  * Run MMseqs2 against colabfold_databases to produce paired a3m files for
  * chain_A and chain_B.  The input FASTA is written in "separate" style so
  * colabfold_search names outputs chain_A.a3m / chain_B.a3m directly.
@@ -45,7 +30,6 @@ process COLABFOLD_SEARCH {
 
     script:
     """
-    # ─── Write the search FASTA ───────────────────────────────────────────
     # colabfold_search produces one a3m per FASTA record, named after the
     # header. We request THREE:
     #   chain_A / chain_B  — per-chain (unpaired) MSAs; Boltz consumes these.

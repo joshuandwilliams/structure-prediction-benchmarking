@@ -1,26 +1,24 @@
 /*
- * =============================================================================
- * AlphaFold2-Multimer module
- * =============================================================================
- * Uses the NBI HPC AlphaFold 2.3.2 installation via `source package`.
+ * AlphaFold2-Multimer 2.3.2 from the HPC source package, reduced_dbs preset,
+ * 5 models x 5 predictions each.
  *
- * Unlike the original bench_af2m.sh, this process does NOT need to snapshot
- * and restore the pre-source-package environment before invoking the metrics
- * container — COMPUTE_METRICS runs in its own separate Nextflow process with
- * its own clean environment, so PATH/LD_LIBRARY_PATH/PYTHONPATH pollution
- * stays contained inside this work directory.
- *
- * Resource preset matches the original SBATCH header: 20 CPU, 64 GB RAM,
- * 1 GPU, 24h walltime.
+ * Templates are disabled by pinning --max_template_date to 1900-01-01, which
+ * returns zero hits. run_alphafold.py has no flag to switch the search off. At
+ * the previous 2020-05-14 setting AF2M could retrieve 10 of the 18 benchmark
+ * complexes themselves as templates.
  */
 
-
 /*
- * AF2M
- * ----
- * Run AlphaFold2-Multimer 2.3.2 with full MSA search (reduced_dbs preset)
- * and real template search capped at 2020-05-14 for consistent benchmarking.
- * Produces 5 models × 5 multimer predictions each = 25 structures by default.
+ * Run AlphaFold2-Multimer 2.3.2 with full MSA search (reduced_dbs preset).
+ * Produces 5 models × 5 multimer predictions each = 25 structures by
+ * default. Templates are disabled by pinning --max_template_date to
+ * 1900-01-01, which returns zero hits.  run_alphafold.py has no flag to
+ * switch the template search off, and an early date is the standard way to
+ * do it.  This matters: at the previous 2020-05-14 setting, AF2M could
+ * retrieve 10 of the 18 Tier-1 benchmark complexes themselves as templates,
+ * which is the answer the benchmark is scoring.  Every other predictor in
+ * the comparison is template-free, so this keeps the inputs uniform across
+ * models.
  */
 process AF2M {
     tag "${params.project_name}"
@@ -45,7 +43,6 @@ process AF2M {
     export TF_FORCE_UNIFIED_MEMORY=1
     export XLA_PYTHON_CLIENT_MEM_FRACTION=4.0
 
-    # ─── Write multimer FASTA (separate-style) ────────────────────────────
     cat > input.fasta << EOF
 >chain_A
 ${receptor_seq}
@@ -56,7 +53,6 @@ EOF
     DATA_DIR="${params.af2_data_dir}"
     mkdir -p output
 
-    # ─── Load AlphaFold 2.3.2 from HPC source package ────────────────────
     source package ${params.af2_package_id}
 
     echo "Running AF2-Multimer prediction (with MSA)..."
@@ -65,7 +61,7 @@ EOF
         --fasta_paths=\${PWD}/input.fasta \\
         --data_dir="\${DATA_DIR}" \\
         --output_dir=\${PWD}/output \\
-        --max_template_date=2020-05-14 \\
+        --max_template_date=1900-01-01 \\
         --model_preset=multimer \\
         --db_preset=reduced_dbs \\
         --small_bfd_database_path="\${DATA_DIR}/small_bfd/bfd-first_non_consensus_sequences.fasta" \\

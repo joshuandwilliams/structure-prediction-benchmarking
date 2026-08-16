@@ -1,30 +1,14 @@
 /*
- * =============================================================================
- * Chai-1 module
- * =============================================================================
- * Chai-1 tries to write weights to CHAI_DOWNLOADS_DIR at runtime.  The
- * container already ships pre-downloaded weights at /opt/chai_cache.
- * The strategy (preserved from bench_chai1.sh):
+ * Chai-1. Weights ship in the image at /opt/chai_cache, exposed read-only via
+ * CHAI_DOWNLOADS_DIR, with a job-local scratch dir pre-populated with the
+ * top-level metadata files so Chai-1 does not attempt a network fetch on a
+ * cluster with no internet.
  *
- *   1. Create a small job-local scratch dir under /tmp for Chai-1
- *      metadata writes (not the multi-GB weights).
- *   2. Expose /opt/chai_cache read-only via CHAI_DOWNLOADS_DIR so Chai-1
- *      finds weights immediately without downloading anything.
- *   3. Pre-populate the scratch with tiny top-level metadata files from
- *      /opt/chai_cache so Chai-1 doesn't attempt a network download for
- *      index files (the HPC has no internet access).
- *   4. Clean up the scratch dir on EXIT via a trap.
- *
- * Seeds are run SERIALLY in a single Python heredoc because Chai-1's
- * run_inference() is a Python function rather than a CLI.
+ * Seeds run serially in one Python heredoc because run_inference is a function
+ * rather than a CLI.
  */
 
-
-/*
- * CHAI1
- * -----
- * Run Chai-1 v0.6.1 inference across 5 seeds × 5 diffusion samples.
- */
+/* Run Chai-1 v0.6.1 inference across 5 seeds × 5 diffusion samples. */
 process CHAI1 {
     tag "${params.project_name}"
     label 'gpu'
@@ -46,7 +30,6 @@ process CHAI1 {
     """
     set -euo pipefail
 
-    # ─── Chai-1 FASTA (uses protein|name=<header> style) ─────────────────
     cat > input.fasta << EOF
 >protein|name=chain_A
 ${receptor_seq}
@@ -54,7 +37,6 @@ ${receptor_seq}
 ${effector_seq}
 EOF
 
-    # ─── Job-local scratch cache for Chai-1 metadata writes ───────────────
     CHAI_SCRATCH=\$(mktemp -d "/tmp/chai1_cache_\${SLURM_JOB_ID:-\$\$}_XXXXXX")
     echo "Chai-1 scratch cache: \${CHAI_SCRATCH}"
 
@@ -137,7 +119,6 @@ for f in sorted(output_dir.rglob("*")):
         print(f"  {f} ({f.stat().st_size} bytes)")
 CHAI_SCRIPT
 
-    # ─── Aggregate multi-seed outputs ─────────────────────────────────────
     bash ${projectDir}/bin/aggregate_seed_outputs.sh cif pdb npz pt json
 
     echo "Aggregated PDB files:"

@@ -1,39 +1,16 @@
 /*
- * =============================================================================
- * AlphaFold 3 module
- * =============================================================================
- * Three processes:
+ * AlphaFold 3, with the full data pipeline and with --norun_data_pipeline.
  *
- *   AF3_SETUP_DB  — idempotently build the combined AF3 database directory
- *                   at params.af3_db_dir via symlinks to the shared reference
- *                   data location.  Runs exactly once; AF3 and AF3_NOMSA
- *                   both consume its output channel.
+ * AF3_SETUP_DB builds a flat symlink union of the v3.0.0 databases plus BFD and
+ * MGnify from v2.3.2, because run_alphafold.py needs them all under one
+ * --db_dir. It runs once and both predictor processes consume its output.
  *
- *   AF3           — full MSA + template search (runs the data pipeline)
- *   AF3_NOMSA     — --norun_data_pipeline with empty MSA/template fields
- *
- * Both predictor variants take JSON input with 5 modelSeeds
- * (42, 123, 456, 789, 1024).  The NBI AF3 installation (Dec 2024 build)
- * does not expose --num_diffusion_samples / --num_seeds / --num_recycles
- * CLI flags; sampling is controlled only via the modelSeeds JSON field.
- * Default is 5 diffusion samples per seed and 10 recycles, giving
- * 5 × 5 = 25 output structures.
- *
- * The AF3 data directory lives at params.af3_db_dir because AF3's run_alphafold.py
- * requires all databases to sit in a single --db_dir.  The shared
- * reference-data location cannot itself serve as --db_dir because the
- * BFD/MGnify files from db-v2.3.2 need to appear alongside the v3.0.0 files,
- * so we build a flat union via symlinks.
- *
- * As with AF2M, no env-snapshot/restore is needed because COMPUTE_METRICS is
- * a separate Nextflow process with a clean environment — any PATH pollution
- * from `source package` stays confined to the AF3 work directory.
+ * Both take 5 modelSeeds. The NBI build exposes no sampling flags, so it runs
+ * its defaults of 5 diffusion samples per seed and 10 recycles, giving 25
+ * structures. Ten recycles is half what Boltz, Chai-1 and ColabFold use here.
  */
 
-
 /*
- * AF3_SETUP_DB
- * ------------
  * Create/refresh the params.af3_db_dir symlink farm exactly once.  Emits a
  * value channel containing the dir path, which AF3 and AF3_NOMSA both
  * consume.  Using `-resume` will skip this process cleanly because the
@@ -53,7 +30,7 @@ process AF3_SETUP_DB {
 
     AF3_DATA_DIR="${params.af3_db_dir}"
 
-    # ─── Use the existing symlink farm if it's already populated ─────────
+    # Use the existing symlink farm if it's already populated
     # The farm is maintained at params.af3_db_dir.  If the critical BFD link
     # is already there we trust it; otherwise (re)build the farm from the
     # shared reference data.  ln -sfn is idempotent and never deletes links
@@ -72,7 +49,7 @@ process AF3_SETUP_DB {
             "\${AF3_DATA_DIR}/mgy_clusters_2022_05.fa"
     fi
 
-    # ─── Verify the critical databases resolve (fail early and clearly) ──
+    # Verify the critical databases resolve (fail early and clearly)
     # Catches a dangling symlink here instead of deep inside run_alphafold.py.
     for req in bfd-first_non_consensus_sequences.fasta mgy_clusters_2022_05.fa mmcif_files; do
         if [ ! -e "\${AF3_DATA_DIR}/\${req}" ]; then
@@ -90,18 +67,14 @@ process AF3_SETUP_DB {
     """
 }
 
-
 /*
- * AF3
- * ---
- * AlphaFold 3 with the full data pipeline (MSA + PDB template search) for both
- * chains — vanilla AF3.  No custom effector template is injected here: AF3
- * rejects a chain that combines an auto-built MSA with a custom template
- * (ValueError: "...set only partially"), so effector-template steering is
- * applied only in AF3_NOMSA (and ColabFold), not in this with-MSA condition.
- *
- * Note: AF2M cannot inject custom templates via its CLI either; its templates
- * are limited to structures deposited before 2020-05-14.
+ * AlphaFold 3 with the full data pipeline (MSA search) for both chains.
+ * Templates are disabled by pinning --max_template_date to 1900-01-01, which
+ * returns zero hits.  Left at AF3's own default of 2021-09-30, the template
+ * search can retrieve 13 of the 18 Tier-1 benchmark complexes themselves —
+ * the answer the benchmark is scoring.  Every variant in the model
+ * comparison is template-free, so this keeps the inputs uniform across
+ * predictors.
  */
 process AF3 {
     tag "${params.project_name}"
@@ -130,13 +103,11 @@ process AF3 {
 
     mkdir -p output
 
-    # ─── Generate AF3 JSON (vanilla AF3: full pipeline, no template) ──────
     singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
         python ${projectDir}/bin/af3_input.py \\
             "${receptor_seq}" "${effector_seq}" full \\
             --output input.json
 
-    # ─── Load AF3 environment and run ────────────────────────────────────
     source package ${params.af3_package_id}
 
     echo "Running AlphaFold 3 prediction..."
@@ -145,20 +116,17 @@ process AF3 {
         --json_path=\${PWD}/input.json \\
         --model_dir="${params.af3_model_dir}" \\
         --db_dir="${af3_db_dir}" \\
-        --output_dir=\${PWD}/output
+        --output_dir=\${PWD}/output \\
+        --max_template_date=1900-01-01
 
     echo "AF3 output files:"
     find output -type f | head -20 || true
     """
 }
 
-
 /*
- * AF3_NOMSA
- * ---------
- * AlphaFold 3 with --norun_data_pipeline: empty MSA, no PDB template search.
- * The effector structural template is still injected if available — giving
- * inference-only folding guided by the known effector structure but no MSA.
+ * AlphaFold 3 with --norun_data_pipeline: empty MSA, no PDB template search,
+ * no injected template.  Pure inference-only folding from sequence alone.
  */
 process AF3_NOMSA {
     tag "${params.project_name}"
@@ -172,7 +140,6 @@ process AF3_NOMSA {
     val  effector_seq
     val  af3_db_dir
     path db_ready_flag
-    path effector_template_cif
 
     output:
     path "output",      emit: prediction_dir
@@ -188,11 +155,9 @@ process AF3_NOMSA {
 
     mkdir -p output
 
-    # ─── Generate AF3 JSON (no MSA; effector template if available) ───────
     singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
         python ${projectDir}/bin/af3_input.py \\
             "${receptor_seq}" "${effector_seq}" nomsa \\
-            --template ${effector_template_cif} \\
             --output input.json
 
     source package ${params.af3_package_id}

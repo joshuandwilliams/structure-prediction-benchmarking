@@ -1,36 +1,15 @@
 /*
- * =============================================================================
- * Boltz-1 module
- * =============================================================================
- * Three variants sharing the same unified `boltz predict --model boltz1` CLI:
+ * Boltz-1: single-sequence baseline, with a ColabFold MSA, and with a
+ * pocket-only constraint. Boltz-1's schema forces max_distance to 6.0 and
+ * rejects contact constraints, so the constrained variant is pocket only.
  *
- *   BOLTZ1              — no MSA, no constraints (single-sequence baseline)
- *   BOLTZ1_MSA          — with colabfold_search a3m MSA
- *   BOLTZ1_CONSTRAINED  — pocket constraint only (Boltz-1 schema enforces
- *                         max_distance==6.0 and rejects contact constraints)
- *
- * Shared gotchas preserved from the original bench scripts:
- *   1. `boltz predict` exits 0 even on silent parse failures — the process
- *      loop verifies that each seed produced at least one PDB.
- *   2. --no_kernels is required because cuequivariance_torch is absent
- *      from Boltz1_Boltz2_Chai1.img.
- *   3. Seeds are run SERIALLY inside the process (five seeds: 42, 123, 456,
- *      789, 1024) to match the original bench scripts and respect the small
- *      jic-gpu queue.
- *   4. After all seeds complete, the outputs are aggregated into
- *      all_outputs/<seed_tag>/... so compute_metrics.py can recursively glob
- *      across every seed in one pass.
- *
- * The prediction_dir output is the aggregated staging dir and is what the
- * downstream metrics process consumes.
+ * --no_kernels is required because cuequivariance_torch is absent from the
+ * image. Seeds run serially inside the process to respect the GPU queue.
  */
 
-
 /*
- * BOLTZ1
- * ------
- * Unconstrained Boltz-1 baseline: single-sequence MSA (just the query),
- * no constraints, 5 seeds × 5 diffusion samples = 25 structures.
+ * Unconstrained Boltz-1 baseline: single-sequence MSA (just the query), no
+ * constraints, 5 seeds × 5 diffusion samples = 25 structures.
  */
 process BOLTZ1 {
     tag "${params.project_name}"
@@ -53,7 +32,6 @@ process BOLTZ1 {
     """
     set -euo pipefail
 
-    # ─── Input: bare-chain FASTA pointing at single-sequence "MSAs" ─────
     mkdir -p msa
     cat > msa/A.a3m << EOF
 >query
@@ -75,57 +53,16 @@ EOF
     cat input.fasta
     echo ""
 
-    # ─── Run predictions serially across 5 seeds ──────────────────────────
-    run_seed() {
-        local seed="\$1"
-        local out_dir="\$2"
-
-        singularity exec --nv \\
-            --bind \${PWD}:\${PWD} \\
-            ${params.benchmark_container} boltz predict \\
-                input.fasta \\
-                --model boltz1 \\
-                --out_dir "\${out_dir}" \\
-                --recycling_steps 20 \\
-                --diffusion_samples 5 \\
-                --sampling_steps 20 \\
-                --seed "\${seed}" \\
-                --num_workers 0 \\
-                --output_format pdb \\
-                --write_full_pae \\
-                --no_kernels \\
-                --override
-
-        local n_pdb
-        n_pdb=\$(find "\${out_dir}" -name "*.pdb" 2>/dev/null | wc -l)
-        if [ "\${n_pdb}" -eq 0 ]; then
-            echo "ERROR: Seed \${seed} produced no PDB files — boltz silently skipped input." >&2
-            exit 1
-        fi
-        echo "  Seed \${seed}: \${n_pdb} PDB(s) OK"
-    }
-
-    run_seed 42 output
-    for SEED in 123 456 789 1024; do
-        echo "Running Boltz-1 with seed \${SEED}..."
-        run_seed "\${SEED}" "output_seed\${SEED}"
-    done
-
-    # ─── Aggregate all seed outputs into one staging dir ──────────────────
-    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz json
-
-    echo "Aggregated PDB files:"
-    find all_outputs -name "*.pdb" | sort
+    bash ${projectDir}/bin/run_boltz_seeds.sh \\
+        input.fasta ${params.benchmark_container} ${projectDir} "Boltz-1" \\
+        --model boltz1
     """
 }
 
-
 /*
- * BOLTZ1_MSA
- * ----------
- * Boltz-1 with a real MSA.  Receives chain_A.a3m and chain_B.a3m from
- * the shared COLABFOLD_SEARCH process and uses them directly in the
- * Boltz YAML input.
+ * Boltz-1 with a real MSA.  Receives chain_A.a3m and chain_B.a3m from the
+ * shared COLABFOLD_SEARCH process and uses them directly in the Boltz YAML
+ * input.
  */
 process BOLTZ1_MSA {
     tag "${params.project_name}"
@@ -150,7 +87,6 @@ process BOLTZ1_MSA {
     """
     set -euo pipefail
 
-    # ─── Stage the shared MSAs locally so Boltz can read them ─────────────
     # chain_a_a3m/chain_b_a3m are already staged by Nextflow in the work dir.
     # We reference them by their staged names directly in the YAML.
 
@@ -171,59 +107,17 @@ YAMLEOF
     cat input.yaml
     echo ""
 
-    run_seed() {
-        local seed="\$1"
-        local out_dir="\$2"
-
-        singularity exec --nv \\
-            --bind \${PWD}:\${PWD} \\
-            ${params.benchmark_container} boltz predict \\
-                input.yaml \\
-                --model boltz1 \\
-                --out_dir "\${out_dir}" \\
-                --recycling_steps 20 \\
-                --diffusion_samples 5 \\
-                --sampling_steps 20 \\
-                --seed "\${seed}" \\
-                --num_workers 0 \\
-                --output_format pdb \\
-                --write_full_pae \\
-                --use_potentials \\
-                --no_kernels \\
-                --override
-
-        local n_pdb
-        n_pdb=\$(find "\${out_dir}" -name "*.pdb" 2>/dev/null | wc -l)
-        if [ "\${n_pdb}" -eq 0 ]; then
-            echo "ERROR: Seed \${seed} produced no PDB files — boltz silently skipped input." >&2
-            exit 1
-        fi
-        echo "  Seed \${seed}: \${n_pdb} PDB(s) OK"
-    }
-
-    run_seed 42 output
-    for SEED in 123 456 789 1024; do
-        echo "Running Boltz-1 MSA with seed \${SEED}..."
-        run_seed "\${SEED}" "output_seed\${SEED}"
-    done
-
-    # ─── Aggregate outputs ────────────────────────────────────────────────
-    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz json
-
-    echo "Aggregated PDB files:"
-    find all_outputs -name "*.pdb" | sort
+    bash ${projectDir}/bin/run_boltz_seeds.sh \\
+        input.yaml ${params.benchmark_container} ${projectDir} "Boltz-1 MSA" \\
+        --model boltz1
     """
 }
 
-
 /*
- * BOLTZ1_CONSTRAINED
- * ------------------
- * Boltz-1 with a pocket constraint derived from the reference complex.
- *
- * NOTE: Boltz-1 schema.py enforces max_distance == 6.0 for ALL constraint
- * blocks and silently rejects contact constraints, so only a pocket block
- * is generated. bin/extract_constraints_boltz1.py enforces the exactly-6.0
+ * Boltz-1 with a pocket constraint derived from the reference complex. NOTE:
+ * Boltz-1 schema.py enforces max_distance == 6.0 for ALL constraint blocks
+ * and silently rejects contact constraints, so only a pocket block is
+ * generated. bin/extract_constraints_boltz1.py enforces the exactly-6.0
  * invariant, and bin/validate_boltz_yaml.py --model boltz1 double-checks it
  * before boltz predict runs.
  */
@@ -253,7 +147,6 @@ process BOLTZ1_CONSTRAINED {
     """
     set -euo pipefail
 
-    # ─── Extract pocket constraint from reference PDB ─────────────────────
     echo "=== Extracting pocket constraint from reference PDB ==="
     echo "  Reference PDB:   ${reference_pdb}"
     echo "  Pocket cutoff:   ${pocket_cutoff} Å"
@@ -275,7 +168,6 @@ process BOLTZ1_CONSTRAINED {
         exit 1
     fi
 
-    # ─── Prepare Boltz YAML (single-sequence MSAs + pocket constraint) ───
     mkdir -p msa
     cat > msa/A.a3m << EOF
 >query
@@ -305,54 +197,13 @@ YAMLEOF
     cat input.yaml
     echo ""
 
-    # ─── Validate YAML (max_distance==6.0, no contact blocks) ────────────
+    # Validate YAML (max_distance==6.0, no contact blocks)
     echo "=== Validating YAML ==="
     singularity exec --bind \${PWD}:\${PWD} ${params.benchmark_container} \\
         python ${projectDir}/bin/validate_boltz_yaml.py input.yaml --model boltz1
 
-    # ─── Run predictions ──────────────────────────────────────────────────
-    run_seed() {
-        local seed="\$1"
-        local out_dir="\$2"
-
-        singularity exec --nv \\
-            --bind \${PWD}:\${PWD} \\
-            ${params.benchmark_container} boltz predict \\
-                input.yaml \\
-                --model boltz1 \\
-                --out_dir "\${out_dir}" \\
-                --recycling_steps 20 \\
-                --diffusion_samples 5 \\
-                --sampling_steps 20 \\
-                --seed "\${seed}" \\
-                --num_workers 0 \\
-                --output_format pdb \\
-                --write_full_pae \\
-                --use_potentials \\
-                --no_kernels \\
-                --override
-
-        local n_pdb
-        n_pdb=\$(find "\${out_dir}" -name "*.pdb" 2>/dev/null | wc -l)
-        if [ "\${n_pdb}" -eq 0 ]; then
-            echo "ERROR: Seed \${seed} produced no PDB files." >&2
-            echo "  boltz predict exited 0 but silently skipped the input." >&2
-            echo "  Check stderr for 'Failed to process' or 'Max distance != 6.0'." >&2
-            exit 1
-        fi
-        echo "  Seed \${seed}: \${n_pdb} PDB(s) OK"
-    }
-
-    run_seed 42 output
-    for SEED in 123 456 789 1024; do
-        echo "Running Boltz-1 constrained with seed \${SEED}..."
-        run_seed "\${SEED}" "output_seed\${SEED}"
-    done
-
-    # ─── Aggregate outputs ────────────────────────────────────────────────
-    bash ${projectDir}/bin/aggregate_seed_outputs.sh pdb npz json
-
-    echo "Aggregated PDB files:"
-    find all_outputs -name "*.pdb" | sort
+    bash ${projectDir}/bin/run_boltz_seeds.sh \\
+        input.yaml ${params.benchmark_container} ${projectDir} "Boltz-1 constrained" \\
+        --model boltz1
     """
 }
