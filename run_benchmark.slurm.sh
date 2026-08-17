@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name="nf_benchmark"
-#SBATCH -p jic-medium
+#SBATCH -p jic-compute
 #SBATCH -N 1
 #SBATCH -n 1
 #SBATCH -c 2
 #SBATCH --mem=4G
-#SBATCH --time=72:00:00
+#SBATCH --time=30-00:00:00
 #SBATCH --output=nextflow_benchmark_%j.out
 #SBATCH --error=nextflow_benchmark_%j.err
 #SBATCH --mail-type=END,FAIL
