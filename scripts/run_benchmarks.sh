@@ -22,7 +22,8 @@
 #
 #   bash scripts/run_benchmarks.sh --tiers 1                              # Run 1
 #   bash scripts/run_benchmarks.sh --tiers 1 --params params_template.yml # Run 2
-#   bash scripts/run_benchmarks.sh --tiers 1 -j 4
+#   bash scripts/run_benchmarks.sh --tiers 1 -j 4    # throttle to 4 targets
+#   bash scripts/run_benchmarks.sh --tiers 1 -j 0    # no throttle (default)
 #   bash scripts/run_benchmarks.sh --tiers 1 --pdbs 6G10   # one target only
 #   bash scripts/run_benchmarks.sh --tiers 1 --params params_template.yml \
 #       --after 12345                                      # chain Run 2 after Run 1
@@ -115,7 +116,7 @@ fi
 # Launcher mode
 # ═════════════════════════════════════════════════════════════════════════
 
-MAX_CONCURRENT=6
+MAX_CONCURRENT=0
 TIERS=""
 PARAMS="params.yml"
 LIST_ONLY=0
@@ -204,11 +205,19 @@ fi
 echo "Params file: ${PARAMS}"
 echo "To run (tiers ${TIERS}, ${#TODO[@]}): ${TODO[*]}"
 [ "${#SKIP[@]}" -gt 0 ] && echo "Already complete, skipped (${#SKIP[@]}): ${SKIP[*]}"
-echo "Max concurrent: ${MAX_CONCURRENT}   (auto-requeue on node failure)"
+echo "Max concurrent: $([ "${MAX_CONCURRENT}" -gt 0 ] 2>/dev/null && echo "${MAX_CONCURRENT}" || echo "unlimited")   (auto-requeue on node failure)"
 
 if [ "${LIST_ONLY}" -eq 1 ]; then
     echo "(--list: nothing submitted)"
     exit 0
+fi
+
+# -j 0 means no array throttle: every target starts at once and SLURM does the
+# queueing. The real ceiling is the 10 A100s in jic-gpu, so throttling targets
+# only delays their CPU stages without freeing a GPU any sooner.
+THROTTLE=""
+if [ "${MAX_CONCURRENT}" -gt 0 ] 2>/dev/null; then
+    THROTTLE="%${MAX_CONCURRENT}"
 fi
 
 mkdir -p "${STATE_DIR}"
@@ -232,7 +241,7 @@ fi
 
 jobid="$(sbatch --parsable \
     "${DEP[@]+"${DEP[@]}"}" \
-    --array="0-$((N - 1))%${MAX_CONCURRENT}" \
+    --array="0-$((N - 1))${THROTTLE}" \
     --output="${STATE_DIR}/nf_%A_%a.out" \
     --error="${STATE_DIR}/nf_%A_%a.err" \
     "${SELF}" "${LISTFILE}" "${PARAMS}" "${PIPELINE_DIR}")"
