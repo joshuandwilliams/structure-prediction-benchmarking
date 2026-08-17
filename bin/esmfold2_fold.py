@@ -110,9 +110,18 @@ def main():   # pragma: no cover - needs a GPU and the esm package
     # raising, so the metrics container could not read these structures at all.
     # PDB is unambiguous across both gemmi versions, and the chains here are far
     # too short to hit any PDB format limit.
+    #
+    # result.complex is a MolecularComplex, which has no PDB writer; the PDB
+    # methods live on ProteinComplex. Wrapped in try/except because this is an
+    # optimisation for the metrics container, not a requirement: the mmCIF above
+    # is already on disk, so an esm API change must never cost us the fold.
     pdb_path = os.path.join(args.out_dir, "esmfold2_pred.pdb")
-    with open(pdb_path, "w") as f:
-        f.write(result.complex.to_pdb_string())
+    try:
+        with open(pdb_path, "w") as f:
+            f.write(result.complex.to_protein_complex().to_pdb_string())
+    except Exception as exc:                              # pragma: no cover
+        print(f"WARNING: could not write {pdb_path} ({exc}). "
+              "Metrics will fall back to the mmCIF.", file=sys.stderr)
 
     conf = build_confidences(
         result.plddt,
