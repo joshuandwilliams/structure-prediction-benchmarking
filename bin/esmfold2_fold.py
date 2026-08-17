@@ -115,13 +115,19 @@ def main():   # pragma: no cover - needs a GPU and the esm package
     # methods live on ProteinComplex. Wrapped in try/except because this is an
     # optimisation for the metrics container, not a requirement: the mmCIF above
     # is already on disk, so an esm API change must never cost us the fold.
+    # normalize_chain_ids_for_pdb() is required, not optional: chain ids longer
+    # than one character make to_pdb_string() raise BadStructureError, and the
+    # ids reaching this point are not guaranteed to be single characters.
     pdb_path = os.path.join(args.out_dir, "esmfold2_pred.pdb")
     try:
+        protein = result.complex.to_protein_complex().normalize_chain_ids_for_pdb()
         with open(pdb_path, "w") as f:
-            f.write(result.complex.to_protein_complex().to_pdb_string())
+            f.write(protein.to_pdb_string())
     except Exception as exc:                              # pragma: no cover
         print(f"WARNING: could not write {pdb_path} ({exc}). "
-              "Metrics will fall back to the mmCIF.", file=sys.stderr)
+              "Metrics will fall back to the mmCIF, which gemmi 0.6.5 in the "
+              "metrics container cannot read, so this variant will be missing.",
+              file=sys.stderr)
 
     conf = build_confidences(
         result.plddt,
