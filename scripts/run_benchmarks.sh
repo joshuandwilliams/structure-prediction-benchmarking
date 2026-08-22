@@ -56,7 +56,7 @@
 #SBATCH -n 1
 #SBATCH -c 2
 #SBATCH --mem=4G
-#SBATCH --time=30-00:00:00
+#SBATCH --time=4-00:00:00
 #SBATCH --requeue
 #SBATCH --output=array_%A_%a.out
 
